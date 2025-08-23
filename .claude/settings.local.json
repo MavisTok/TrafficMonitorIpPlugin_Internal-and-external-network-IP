@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm:*)",
+      "Bash(dir:*)",
+      "Bash(cp:*)",
+      "Bash(msbuild:*)",
+      "Bash(\"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe\" TrafficMonitorIpPlugin.sln /p:Configuration=Debug /p:Platform=x64 /v:detailed)",
+      "Bash(where msbuild)",
+      "Bash(\"D:\\Microsoft Visual Studio\\2022\\Professional\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe\" TrafficMonitorIpPlugin.sln /p:Configuration=Debug /p:Platform=x64)",
+      "Bash(\"D:\\Microsoft Visual Studio\\2022\\Professional\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe\" \"TrafficMonitorIpPlugin.sln\" \"/p:Configuration=Debug\" \"/p:Platform=x64\")",
+      "Bash(\"D:\\Microsoft Visual Studio\\2022\\Professional\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe\" TrafficMonitorIpPlugin.sln -p:Configuration=Debug -p:Platform=x64)",
+      "Bash(\"D:\\Microsoft Visual Studio\\2022\\Professional\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe\" \"TrafficMonitorIpPlugin.vcxproj\" -p:Configuration=Debug -p:Platform=x64)",
+      "Bash(\"D:\\Microsoft Visual Studio\\2022\\Professional\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe\" \"TrafficMonitorIpPlugin.sln\" -p:Configuration=Debug -p:Platform=x64)",
+      "Bash(\"D:\\Microsoft Visual Studio\\2022\\Professional\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe\" \"TrafficMonitorIpPlugin.sln\" -p:Configuration=Release -p:Platform=x64)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl:*)"
+    ],
+    "deny": [],
+    "ask": [],
+    "additionalDirectories": [
+      "C:\\Users\\Lynn\\Desktop\\TrafficMonitorPlugins-main\\PluginTester"
+    ]
+  }
+}
