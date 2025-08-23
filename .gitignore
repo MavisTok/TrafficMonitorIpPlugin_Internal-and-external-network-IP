@@ -361,3 +361,17 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Claude Code specific files
+.claude/
+*.claude
+.claude-*
+
+# IDE and AI assistant files
+.vscode/
+.idea/
+
+# Project specific ignores
+log/
+*.LOG
+test_ipinfo.cpp
