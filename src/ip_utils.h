@@ -22,6 +22,7 @@ namespace iputils {
 struct IpWithCountry {
     std::wstring ip;        ///< IP地址
     std::wstring country;   ///< 国家代码（如US、CN、JP等）
+    std::wstring as_name;   ///< 机器供应商（DMIT）
     
     /**
      * @brief 检查IP信息是否有效
@@ -40,6 +41,71 @@ struct IpWithCountry {
             return ip;
         }
         return country + L" " + ip;
+    }
+    
+    /**
+     * @brief 从as_name(org)中提取公司名称主体
+     * @return 提取的公司主体名称，如"AS906 DMIT Cloud Services"返回"DMIT Cloud Services"
+     */
+    std::wstring GetCompanyName() const {
+        if (as_name.empty()) {
+            return L"";
+        }
+        
+        std::wstring name = as_name;
+        
+        // 去除首尾空格
+        while (!name.empty() && (name.front() == L' ' || name.front() == L'\t')) {
+            name.erase(0, 1);
+        }
+        while (!name.empty() && (name.back() == L' ' || name.back() == L'\t')) {
+            name.pop_back();
+        }
+        
+        // 如果以AS开头，去除AS号码部分（如"AS906 DMIT Cloud Services"）
+        if (name.substr(0, 2) == L"AS") {
+            size_t space_pos = name.find(L' ');
+            if (space_pos != std::wstring::npos && space_pos + 1 < name.length()) {
+                name = name.substr(space_pos + 1);
+                // 去除前导空格
+                while (!name.empty() && (name.front() == L' ' || name.front() == L'\t')) {
+                    name.erase(0, 1);
+                }
+            }
+        }
+        
+        // 查找逗号，截取前半部分（如"Cloudflare, Inc."）
+        size_t comma_pos = name.find(L',');
+        if (comma_pos != std::wstring::npos) {
+            std::wstring front = name.substr(0, comma_pos);
+            // 去除前半部分的尾部空格
+            while (!front.empty() && (front.back() == L' ' || front.back() == L'\t')) {
+                front.pop_back();
+            }
+            if (!front.empty()) {
+                name = front;
+            }
+        }
+        
+        // 去除常见后缀
+        const std::wstring suffixes[] = {L" Inc.", L" LLC", L" Ltd.", L" Corp.", L" Corporation", L" Services"};
+        for (const auto& suffix : suffixes) {
+            size_t pos = name.rfind(suffix);
+            if (pos != std::wstring::npos && pos + suffix.length() == name.length()) {
+                std::wstring without_suffix = name.substr(0, pos);
+                // 去除后缀后的尾部空格
+                while (!without_suffix.empty() && (without_suffix.back() == L' ' || without_suffix.back() == L'\t')) {
+                    without_suffix.pop_back();
+                }
+                if (!without_suffix.empty()) {
+                    name = without_suffix;
+                    break;
+                }
+            }
+        }
+        
+        // 如果最终结果为空，返回原始as_name
+        return name.empty() ? as_name : name;
     }
 };
 

@@ -62,12 +62,15 @@ public:
         }
 
         // 获取外网IP（如果启用）
+        std::wstring company_name;
+        iputils::IpWithCountry result;  // 将result声明移到外面
         if (options_.show_external) {
             iputils::ExternalIpOptions opt;
             opt.min_refresh = options_.external_refresh;  // 使用配置的刷新间隔
-            auto result = iputils::GetExternalIPv4WithCountry(opt, force_external_refresh);
+            result = iputils::GetExternalIPv4WithCountry(opt, force_external_refresh);
             if (result.IsValid()) {
                 external = result.GetDisplayString();  // 使用格式化字符串（包含国家代码）
+                company_name = result.GetCompanyName();  // 获取公司名称
             } else {
                 external = L"N/A";  // 显示获取失败状态，而不是空白
             }
@@ -83,7 +86,15 @@ public:
             return internal;
         }
         if (options_.show_external) {
-            // 仅显示外网IP
+            // 仅显示外网IP时，如果有公司信息则在内网位置显示，外网位置显示IP
+            if (!result.as_name.empty() && external != L"N/A") {
+                // 先尝试使用处理过的公司名称
+                if (!company_name.empty()) {
+                    return company_name + options_.separator + external;
+                }
+                // 如果处理失败，直接使用原始as_name
+                return result.as_name + options_.separator + external;
+            }
             return external;
         }
         

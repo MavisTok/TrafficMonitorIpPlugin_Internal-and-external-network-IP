@@ -405,6 +405,7 @@ IpWithCountry GetExternalIPv4WithCountry(const ExternalIpOptions& opt, bool forc
                 ip = ExtractJsonField(trimmed, "origin");  // httpbin.org格式备用
             }
             std::string country = ExtractJsonField(trimmed, "country");
+            std::string as_name = ExtractJsonField(trimmed, "org");
             
             if (!ip.empty()) {
                 // 将UTF-8编码的IP地址转换为宽字符串
@@ -425,6 +426,16 @@ IpWithCountry GetExternalIPv4WithCountry(const ExternalIpOptions& opt, bool forc
                     MultiByteToWideChar(CP_UTF8, 0, country.c_str(), (int)country.size(), 
                                       const_cast<wchar_t*>(wcountry.data()), wlen);
                     result.country = std::move(wcountry);
+                }
+            }
+            if (!as_name.empty()) {
+                // 将UTF-8编码的as_name转换为宽字符串
+                int wlen = MultiByteToWideChar(CP_UTF8, 0, as_name.c_str(), (int)as_name.size(), nullptr, 0);
+                if (wlen > 0) {
+                    std::wstring was_name(wlen, L'\0');
+                    MultiByteToWideChar(CP_UTF8, 0, as_name.c_str(), (int)as_name.size(),
+                        const_cast<wchar_t*>(was_name.data()), wlen);
+                    result.as_name = std::move(was_name);
                 }
             }
         }
