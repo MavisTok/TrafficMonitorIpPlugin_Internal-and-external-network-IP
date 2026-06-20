@@ -10,6 +10,7 @@
 - **智能缓存**：网络变化时快速响应（30秒），稳定时节能运行（5-15分钟）
 - **国家标识**：外网IP前显示国家代码（CN、US、JP等）
 - **网络优先级**：智能选择最佳内网IP（192.168.x.x > 10.x.x.x > 172.16-31.x.x）
+- **Claude IP风险检测**（可选，默认关闭）：对比Cloudflare出口IP、检测受限地区、探测Claude直连可达性、识别VPN/代理/机房IP、追踪30天IP波动
 
 ## 📦 快速安装
 
@@ -52,6 +53,7 @@ JP 154.31.113.180
 - **显示内网IP**：切换内网IP显示
 - **显示外网IP**：切换外网IP显示  
 - **刷新外网IP**：立即强制刷新
+- **查看Claude IP风险详情**：弹窗展示完整的Claude IP风险检测报告（需先在设置中启用该功能）
 
 ## 🏢 供应商显示功能
 
@@ -71,6 +73,23 @@ JP 154.31.113.180
 2. **截取主要名称**：逗号前的部分作为主要名称
 3. **去除后缀**：移除常见的公司后缀（Inc.、LLC、Services等）
 4. **保持简洁**：确保显示内容适合任务栏空间
+
+## 🔍 Claude IP风险检测（可选功能）
+
+默认关闭，需在插件设置中勾选"启用Claude IP风险检测"。启用后会增加以下检测，结果显示在悬浮提示和右键菜单"查看Claude IP风险详情"中：
+
+| 检测项 | 说明 |
+|--------|------|
+| Cloudflare出口对比 | 请求 `claude.ai/cdn-cgi/trace`，对比Cloudflare看到的出口IP与本机检测到的外网IP是否一致，用于发现分流代理 |
+| 受限地区检测 | 将出口国家代码与Anthropic受限地区/OFAC制裁名单比对，仅提示不拦截 |
+| 直连可达性探测 | 对`api.anthropic.com`发起一次轻量探测请求（使用占位假Key，不消耗真实账号），判断网络层是否被屏蔽 |
+| VPN/代理/机房风险 | 通过`ip-api.com`查询当前外网IP是否为VPN/代理/数据中心/移动网络出口 |
+| IP波动追踪 | 本地记录外网IP变化历史，统计近30天出现过的不同IP数量并分级提示 |
+
+**已知取舍**：
+- VPN/代理/机房风险查询走明文HTTP（`ip-api.com`免费版不支持HTTPS），不涉及账号密钥等敏感信息，纯展示用途。
+- 受限地区名单与直连探测的判定逻辑均为社区经验整理，不代表Anthropic官方实时政策，仅供参考。
+- 该功能会引入额外的后台网络请求和一个后台线程，默认关闭，需用户主动启用。
 
 ## ⚙️ 配置选项
 
@@ -124,6 +143,7 @@ separator= | #                 # IP分隔符
 enable_smart_cache=1           # 启用智能缓存
 fast_refresh_seconds=30        # 快速刷新间隔
 max_refresh_minutes=15         # 最大刷新间隔
+enable_claude_risk_check=0     # 启用Claude IP风险检测（默认关闭）
 ```
 
 ## 🐛 故障排除
@@ -148,6 +168,13 @@ max_refresh_minutes=15         # 最大刷新间隔
 
 ---
 
+## 🙏 参考与致谢
+
+"Claude IP风险检测"功能的设计参考了以下项目，特此致谢：
+
+- [ip.net.coffee/claude](https://ip.net.coffee/claude/) —— Cloudflare出口IP对比思路的灵感来源
+- [cso1z/claude-ip-guard](https://github.com/cso1z/claude-ip-guard)（MIT License）—— 受限地区名单、直连可达性探测方法、IP波动分级阈值参考自该项目
+
 ## 🛠️ 开发者信息
 
 ### 构建环境 (Visual Studio 2022)
@@ -160,6 +187,7 @@ max_refresh_minutes=15         # 最大刷新间隔
 ### 项目结构
 - `PluginInterface.h`：TrafficMonitor插件接口
 - `src/ip_utils.h/.cpp`：IP获取和智能缓存逻辑
+- `src/claude_risk.h/.cpp`：Claude IP风险检测逻辑（Cloudflare对比、受限地区、直连探测、VPN/代理识别、IP波动追踪）
 - `src/plugin_options.h`：用户配置选项定义  
 - `src/plugin.h/.cpp`：插件主体实现
 - `src/options_dialog.h/.cpp`：设置对话框
