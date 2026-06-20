@@ -61,6 +61,89 @@ std::wstring ParseTraceField(const std::string& trace_text, const std::string& f
     return L"";
 }
 
+namespace {
+
+struct HistoryEntry {
+    long long timestamp = 0;
+    std::wstring ip;
+    std::wstring country;
+};
+
+std::wstring HistoryFilePath(const std::wstring& config_dir) {
+    std::wstring path = config_dir;
+    if (!path.empty() && path.back() != L'\\' && path.back() != L'/') path += L'\\';
+    path += L"tm_ip_plugin_iphistory.log";
+    return path;
+}
+
+std::vector<HistoryEntry> LoadHistory(const std::wstring& path) {
+    std::vector<HistoryEntry> entries;
+    std::wifstream file(path);
+    if (!file.is_open()) return entries;
+    std::wstring line;
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        size_t p1 = line.find(L'|');
+        if (p1 == std::wstring::npos) continue;
+        size_t p2 = line.find(L'|', p1 + 1);
+        if (p2 == std::wstring::npos) continue;
+        HistoryEntry e;
+        try {
+            e.timestamp = std::stoll(line.substr(0, p1));
+        } catch (...) {
+            continue;
+        }
+        e.ip = line.substr(p1 + 1, p2 - p1 - 1);
+        e.country = line.substr(p2 + 1);
+        entries.push_back(std::move(e));
+    }
+    return entries;
+}
+
+void SaveHistoryAtomic(const std::wstring& path, const std::vector<HistoryEntry>& entries) {
+    std::wstring tmp_path = path + L".tmp";
+    {
+        std::wofstream file(tmp_path, std::ios::trunc);
+        if (!file.is_open()) return;
+        for (const auto& e : entries) {
+            file << e.timestamp << L"|" << e.ip << L"|" << e.country << L"\n";
+        }
+    }
+    MoveFileExW(tmp_path.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+}
+
+// 更新历史文件（按IP去重，30天滚动窗口），返回窗口内不同IP数量
+int UpdateAndCountHistory(const std::wstring& config_dir, const std::wstring& ip, const std::wstring& country) {
+    if (config_dir.empty() || ip.empty()) return 0;
+    std::wstring path = HistoryFilePath(config_dir);
+
+    auto entries = LoadHistory(path);
+
+    const long long now = (long long)std::time(nullptr);
+    const long long window_seconds = 30LL * 24 * 3600;
+
+    entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const HistoryEntry& e) {
+        return (now - e.timestamp) > window_seconds;
+    }), entries.end());
+
+    bool exists = std::any_of(entries.begin(), entries.end(), [&](const HistoryEntry& e) {
+        return e.ip == ip;
+    });
+
+    if (!exists) {
+        HistoryEntry e;
+        e.timestamp = now;
+        e.ip = ip;
+        e.country = country;
+        entries.push_back(std::move(e));
+    }
+
+    SaveHistoryAtomic(path, entries);
+    return (int)entries.size();
+}
+
+} // anonymous namespace
+
 bool IsRestrictedCountry(const std::wstring& country_code) {
     if (country_code.empty()) return false;
     std::wstring upper = country_code;
@@ -130,6 +213,26 @@ void RunSelfTests() {
         assert(ComputeRotationLevel(7) == RotationLevel::Severe);
         assert(ComputeRotationLevel(100) == RotationLevel::Severe);
         assert(ComputeRotationLevel(0) == RotationLevel::None);
+    }
+
+    // --- UpdateAndCountHistory: 去重 + 30天窗口 ---
+    {
+        wchar_t temp_dir[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, temp_dir);
+        std::wstring test_dir = temp_dir;
+        std::wstring test_file = test_dir + L"tm_ip_plugin_iphistory.log";
+        DeleteFileW(test_file.c_str()); // 清理可能残留的上次测试文件
+
+        int c1 = UpdateAndCountHistory(test_dir, L"1.1.1.1", L"US");
+        assert(c1 == 1);
+        int c2 = UpdateAndCountHistory(test_dir, L"1.1.1.1", L"US"); // 重复IP不应新增
+        assert(c2 == 1);
+        int c3 = UpdateAndCountHistory(test_dir, L"2.2.2.2", L"CN"); // 新IP
+        assert(c3 == 2);
+        int c4 = UpdateAndCountHistory(test_dir, L"3.3.3.3", L"JP");
+        assert(c4 == 3);
+
+        DeleteFileW(test_file.c_str()); // 清理测试产生的文件，不污染真实配置目录
     }
 }
 
