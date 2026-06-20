@@ -31,8 +31,25 @@
 namespace claude_risk {
 
 std::wstring ParseTraceField(const std::string& trace_text, const std::string& field) {
-    (void)trace_text; (void)field;
-    return L""; // TODO Task 2
+    std::string pattern = field + "=";
+    size_t pos = 0;
+    while (pos < trace_text.size()) {
+        size_t line_end = trace_text.find('\n', pos);
+        if (line_end == std::string::npos) line_end = trace_text.size();
+        std::string line = trace_text.substr(pos, line_end - pos);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.compare(0, pattern.size(), pattern) == 0) {
+            std::string value = line.substr(pattern.size());
+            int wlen = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), (int)value.size(), nullptr, 0);
+            if (wlen <= 0) return L"";
+            std::wstring wvalue(wlen, L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, value.c_str(), (int)value.size(),
+                                 const_cast<wchar_t*>(wvalue.data()), wlen);
+            return wvalue;
+        }
+        pos = line_end + 1;
+    }
+    return L"";
 }
 
 bool IsRestrictedCountry(const std::wstring& country_code) {
@@ -58,3 +75,30 @@ void RequestClaudeRiskRefreshAsync(const std::wstring& config_dir,
 }
 
 } // namespace claude_risk
+
+#ifdef _DEBUG
+namespace claude_risk {
+namespace {
+
+void RunSelfTests() {
+    // --- ParseTraceField ---
+    {
+        std::string sample =
+            "fl=1164f6\nh=claude.ai\nip=69.63.196.167\nts=1781928228.000\n"
+            "loc=US\ncolo=LAX\nwarp=off\n";
+        assert(ParseTraceField(sample, "ip") == L"69.63.196.167");
+        assert(ParseTraceField(sample, "loc") == L"US");
+        assert(ParseTraceField(sample, "colo") == L"LAX");
+        assert(ParseTraceField(sample, "warp") == L"off");
+        assert(ParseTraceField(sample, "missing_field") == L"");
+    }
+}
+
+struct SelfTestRunner {
+    SelfTestRunner() { RunSelfTests(); }
+};
+static SelfTestRunner g_self_test_runner;
+
+} // anonymous namespace
+} // namespace claude_risk
+#endif // _DEBUG
