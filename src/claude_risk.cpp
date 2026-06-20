@@ -73,8 +73,10 @@ bool IsRestrictedCountry(const std::wstring& country_code) {
 }
 
 RotationLevel ComputeRotationLevel(int distinct_ip_count) {
-    (void)distinct_ip_count;
-    return RotationLevel::None; // TODO Task 4
+    if (distinct_ip_count >= 7) return RotationLevel::Severe;
+    if (distinct_ip_count >= 4) return RotationLevel::Warning;
+    if (distinct_ip_count >= 2) return RotationLevel::Notice;
+    return RotationLevel::None;
 }
 
 ClaudeRiskInfo GetClaudeRiskSnapshot() {
@@ -116,6 +118,18 @@ void RunSelfTests() {
         assert(IsRestrictedCountry(L"UA") == true);  // 名单最后一项
         assert(IsRestrictedCountry(L"US") == false);
         assert(IsRestrictedCountry(L"") == false);
+    }
+
+    // --- ComputeRotationLevel ---
+    {
+        assert(ComputeRotationLevel(1) == RotationLevel::None);
+        assert(ComputeRotationLevel(2) == RotationLevel::Notice);
+        assert(ComputeRotationLevel(3) == RotationLevel::Notice);
+        assert(ComputeRotationLevel(4) == RotationLevel::Warning);
+        assert(ComputeRotationLevel(6) == RotationLevel::Warning);
+        assert(ComputeRotationLevel(7) == RotationLevel::Severe);
+        assert(ComputeRotationLevel(100) == RotationLevel::Severe);
+        assert(ComputeRotationLevel(0) == RotationLevel::None);
     }
 }
 
