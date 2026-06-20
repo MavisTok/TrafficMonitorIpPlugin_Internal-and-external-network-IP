@@ -247,16 +247,110 @@ RotationLevel ComputeRotationLevel(int distinct_ip_count) {
     return RotationLevel::None;
 }
 
+namespace {
+
+std::mutex g_mtx;
+ClaudeRiskInfo g_cached;
+std::chrono::steady_clock::time_point g_last_refresh{};
+bool g_refresh_in_flight = false;
+std::wstring g_last_checked_ip;
+
+constexpr auto kRefreshInterval = std::chrono::minutes(30);
+
+void DoRefresh(std::wstring config_dir, std::wstring external_ip, std::wstring external_country) {
+    ClaudeRiskInfo info;
+    info.checked_at = std::chrono::system_clock::now();
+
+    // 1. Cloudflare出口视角对比
+    auto trace = HttpRequest(L"claude.ai", L"/cdn-cgi/trace", true, L"GET", {}, "", 5000);
+    if (trace.ok && trace.status_code == 200) {
+        info.cf_trace_ok = true;
+        info.cf_ip = ParseTraceField(trace.body, "ip");
+        info.cf_colo = ParseTraceField(trace.body, "colo");
+        info.cf_loc = ParseTraceField(trace.body, "loc");
+        info.cf_warp = (ParseTraceField(trace.body, "warp") == L"on");
+        if (!info.cf_ip.empty() && !external_ip.empty()) {
+            info.ip_mismatch = (info.cf_ip != external_ip);
+        }
+    }
+
+    // 2. 受限地区检测：优先用本次取到的cf_loc，否则回退调用方传入的country（同一次调用，时间点一致）
+    std::wstring country_for_check = !info.cf_loc.empty() ? info.cf_loc : external_country;
+    info.country_restricted = IsRestrictedCountry(country_for_check);
+    if (info.country_restricted) info.restricted_country_code = country_for_check;
+
+    // 3. 直连可达性探测（使用占位假Key，不消耗真实账号额度）
+    {
+        std::vector<std::pair<std::wstring, std::wstring>> headers = {
+            {L"Content-Type", L"application/json"},
+            {L"anthropic-version", L"2023-06-01"},
+            {L"x-api-key", L"sk-ant-api03-dummy"}
+        };
+        std::string body =
+            "{\"model\":\"claude-3-5-sonnet-20240620\",\"max_tokens\":16,"
+            "\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}";
+        auto probe = HttpRequest(L"api.anthropic.com", L"/v1/messages", true, L"POST", headers, body, 5000);
+        if (!probe.ok) {
+            info.direct_reachability = Reachability::Unknown;
+        } else if (probe.status_code == 403) {
+            info.direct_reachability = Reachability::Blocked;
+        } else {
+            info.direct_reachability = Reachability::Reachable;
+        }
+    }
+
+    // 4. VPN/代理/机房风险（ip-api.com，明文HTTP——免费版限制，已知取舍）
+    if (!external_ip.empty()) {
+        std::wstring path = L"/json/" + external_ip + L"?fields=status,proxy,hosting,mobile";
+        auto risk = HttpRequest(L"ip-api.com", path, false, L"GET", {}, "", 5000);
+        if (risk.ok && risk.status_code == 200) {
+            bool found = false;
+            info.is_proxy = (ExtractJsonBool(risk.body, "proxy", &found) == "true");
+            info.is_hosting = (ExtractJsonBool(risk.body, "hosting", &found) == "true");
+            info.is_mobile = (ExtractJsonBool(risk.body, "mobile", &found) == "true");
+            info.risk_query_ok = true;
+        }
+    }
+
+    // 5. IP波动追踪
+    if (!external_ip.empty()) {
+        info.distinct_ip_count_30d = UpdateAndCountHistory(config_dir, external_ip, external_country);
+        info.rotation_level = ComputeRotationLevel(info.distinct_ip_count_30d);
+    }
+
+    info.valid = true;
+
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_cached = info;
+    g_refresh_in_flight = false;
+}
+
+} // anonymous namespace
+
 ClaudeRiskInfo GetClaudeRiskSnapshot() {
-    return ClaudeRiskInfo{}; // TODO Task 7
+    std::lock_guard<std::mutex> lk(g_mtx);
+    return g_cached;
 }
 
 void RequestClaudeRiskRefreshAsync(const std::wstring& config_dir,
                                     const std::wstring& current_external_ip,
                                     const std::wstring& current_country,
                                     bool force_refresh) {
-    (void)config_dir; (void)current_external_ip; (void)current_country; (void)force_refresh;
-    // TODO Task 7
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (g_refresh_in_flight) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    bool ip_changed = !current_external_ip.empty() && current_external_ip != g_last_checked_ip;
+    bool due = (g_last_refresh.time_since_epoch().count() == 0)
+            || (now - g_last_refresh >= kRefreshInterval);
+
+    if (!force_refresh && !ip_changed && !due) return;
+
+    g_refresh_in_flight = true;
+    g_last_refresh = now;
+    g_last_checked_ip = current_external_ip;
+
+    std::thread(DoRefresh, config_dir, current_external_ip, current_country).detach();
 }
 
 } // namespace claude_risk
