@@ -14,6 +14,9 @@
     <ClCompile Include="src\dllmain.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="src\claude_risk.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="src\ip_utils.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -26,6 +29,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="PluginInterface.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="src\claude_risk.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="src\ip_item.h">
