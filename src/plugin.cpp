@@ -15,6 +15,7 @@
 #include "plugin.h"
 #include <Shlwapi.h>        // Shell轻量级实用程序API（用于路径操作）
 #include "options_dialog.h"  // 选项对话框
+#include "claude_risk.h"
 
 #pragma comment(lib, "Shlwapi.lib")  // 链接Shell轻量级实用程序库
 
@@ -224,7 +225,11 @@ void TMIpPlugin::SaveOptions() {
 int IpPluginItem::GetItemWidth() const {
     // 返回能容纳"255.255.255.255"的宽度，约120像素（96 DPI下）
     // TrafficMonitor会根据当前DPI自动缩放
-    return 120;
+    int base = 120;
+    if (provider_ && provider_->GetOptions().enable_claude_risk_check) {
+        base += 14; // 多预留一个字符宽度给紧凑风险标记（⚠）
+    }
+    return base;
 }
 
 /**
@@ -280,8 +285,13 @@ void IpPluginItem::DrawItem(void* hDC, int x, int y, int w, int h, bool dark_mod
     
     // 绘制外网IP（如果存在）
     if (!external_ip_.empty()) {
+        std::wstring display = external_ip_;
+        if (provider_ && provider_->GetOptions().enable_claude_risk_check) {
+            auto risk = claude_risk::GetClaudeRiskSnapshot();
+            if (risk.valid && risk.HasAnyRisk()) display += L" ⚠";
+        }
         RECT rect = {x, currentY, x + w, currentY + lineHeight};
-        ::DrawText(dc, external_ip_.c_str(), -1, &rect, 
+        ::DrawText(dc, display.c_str(), -1, &rect,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         currentY += lineHeight;
     }

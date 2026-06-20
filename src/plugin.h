@@ -66,7 +66,7 @@ public:
         const auto& options = provider_->GetOptions();
         
         // 获取外网IP和公司信息（无论是否显示内网都需要获取）
-        iputils::IpWithCountry ext_result;
+        ext_result_ = iputils::IpWithCountry{};
         if (options.show_external) {
             iputils::ExternalIpOptions opt;
             // 配置智能缓存策略
@@ -80,23 +80,23 @@ public:
                 opt.min_refresh = options.external_refresh;
             }
             
-            ext_result = iputils::GetExternalIPv4WithCountry(opt, force_external_refresh);
+            ext_result_ = iputils::GetExternalIPv4WithCountry(opt, force_external_refresh);
         }
-        
+
         if (options.show_internal) {
             // 显示内网IP
             internal_ip_ = iputils::GetInternalIPv4(options.preferred_adapter);
             if (internal_ip_.empty()) internal_ip_ = L"N/A";
-        } else if (options.show_external && ext_result.IsValid() && !ext_result.as_name.empty()) {
+        } else if (options.show_external && ext_result_.IsValid() && !ext_result_.as_name.empty()) {
             // 内网关闭但外网开启时，在内网位置显示公司名称
-            internal_ip_ = ext_result.GetCompanyName();
+            internal_ip_ = ext_result_.GetCompanyName();
         } else {
             internal_ip_.clear();
         }
-        
+
         if (options.show_external) {
-            if (ext_result.IsValid()) {
-                external_ip_ = ext_result.GetDisplayString();  // 使用格式化字符串（包含国家代码）
+            if (ext_result_.IsValid()) {
+                external_ip_ = ext_result_.GetDisplayString();  // 使用格式化字符串（包含国家代码）
             } else {
                 external_ip_ = L"N/A";
             }
@@ -111,11 +111,22 @@ public:
      */
     const std::wstring& RawValue() const { return value_; }
 
+    /**
+     * @brief 获取最近一次检测到的外网IP（原始值，不含国家代码前缀）
+     */
+    const std::wstring& ExternalIpRaw() const { return ext_result_.ip; }
+
+    /**
+     * @brief 获取最近一次检测到的外网IP对应国家代码
+     */
+    const std::wstring& ExternalCountryRaw() const { return ext_result_.country; }
+
 private:
     IpTextProvider* provider_{};  ///< IP文本提供器指针
     std::wstring value_;          ///< 缓存的IP地址显示文本（备用）
     std::wstring internal_ip_;    ///< 内网IP地址（用于垂直显示）
     std::wstring external_ip_;    ///< 外网IP地址（用于垂直显示）
+    iputils::IpWithCountry ext_result_;  ///< 最近一次Update()获取到的外网IP详情，供claude_risk模块读取
 };
 
 /**
