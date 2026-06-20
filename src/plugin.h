@@ -155,7 +155,7 @@ public:
     const wchar_t* GetTooltipInfo() override;                                    ///< 获取工具提示
 
     // === 插件命令接口实现 ===
-    int GetCommandCount() override { return 3; }                                 ///< 命令数量（3个：切换内网、切换外网、强制刷新）
+    int GetCommandCount() override { return 4; }                                 ///< 命令数量（4个：切换内网、切换外网、强制刷新、查看Claude IP风险详情）
     const wchar_t* GetCommandName(int command_index) override;                   ///< 获取命令名称
     void OnPluginCommand(int command_index, void* hWnd, void* para) override;    ///< 处理插件命令
     int IsCommandChecked(int command_index) override;                            ///< 命令是否选中状态
@@ -164,6 +164,8 @@ private:
     // === 私有辅助方法 ===
     void LoadOptions();                                                           ///< 从配置文件加载选项
     void SaveOptions();                                                           ///< 保存选项到配置文件
+    void AppendClaudeRiskTooltip();                                               ///< 在tooltip_末尾追加Claude风险检测段落
+    void ShowClaudeRiskReport(HWND hWnd);                                         ///< 弹窗展示完整Claude风险报告
 
 private:
     // === 插件状态和组件 ===

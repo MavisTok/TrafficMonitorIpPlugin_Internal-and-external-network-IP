@@ -57,11 +57,17 @@ IPluginItem* TMIpPlugin::GetItem(int index) {
 
 void TMIpPlugin::DataRequired() {
     text_provider_.SetOptions(options_);
+    bool force_refresh_requested = force_refresh_next_;
     item_.Update(force_refresh_next_);
     force_refresh_next_ = false;
 
+    if (options_.enable_claude_risk_check) {
+        claude_risk::RequestClaudeRiskRefreshAsync(
+            config_dir_, item_.ExternalIpRaw(), item_.ExternalCountryRaw(), force_refresh_requested);
+    }
+
     const auto& v = item_.RawValue();
-    
+
     // 确保即使值为空也能提供有意义的显示
     if (v.empty()) {
         // 如果值为空，设置一个默认提示
@@ -74,9 +80,10 @@ void TMIpPlugin::DataRequired() {
         } else {
             tooltip_ = L"请在选项中启用IP显示";
         }
+        AppendClaudeRiskTooltip();
         return;
     }
-    
+
     if (options_.show_internal && options_.show_external) {
         // Split for tooltip if both enabled
         // Format: 内网: x\n外网: y
@@ -107,6 +114,108 @@ void TMIpPlugin::DataRequired() {
     } else {
         tooltip_ = L"请在选项中启用IP显示";
     }
+
+    AppendClaudeRiskTooltip();
+}
+
+void TMIpPlugin::AppendClaudeRiskTooltip() {
+    if (!options_.enable_claude_risk_check) return;
+
+    auto risk = claude_risk::GetClaudeRiskSnapshot();
+    if (!tooltip_.empty()) tooltip_ += L"\n";
+    tooltip_ += L"——Claude IP风险——";
+
+    if (!risk.valid) {
+        tooltip_ += L"\n检测中…";
+        return;
+    }
+
+    tooltip_ += L"\n出口对比: ";
+    if (!risk.cf_trace_ok) {
+        tooltip_ += L"未知（请求失败）";
+    } else if (risk.ip_mismatch) {
+        tooltip_ += L"不一致，可能存在分流代理";
+    } else {
+        tooltip_ += L"一致";
+        if (!risk.cf_colo.empty()) {
+            tooltip_ += L" (";
+            tooltip_ += risk.cf_colo;
+            tooltip_ += L"机房)";
+        }
+    }
+
+    tooltip_ += L"\n受限地区: ";
+    if (risk.country_restricted) {
+        tooltip_ += L"命中：";
+        tooltip_ += risk.restricted_country_code;
+        tooltip_ += L"（仅供参考）";
+    } else {
+        tooltip_ += L"未命中";
+    }
+
+    tooltip_ += L"\n直连Claude: ";
+    switch (risk.direct_reachability) {
+        case claude_risk::Reachability::Reachable: tooltip_ += L"可达"; break;
+        case claude_risk::Reachability::Blocked: tooltip_ += L"被屏蔽(403)"; break;
+        default: tooltip_ += L"未知"; break;
+    }
+
+    tooltip_ += L"\n风险属性: ";
+    if (!risk.risk_query_ok) {
+        tooltip_ += L"未知（查询失败）";
+    } else if (risk.is_proxy || risk.is_hosting) {
+        tooltip_ += L"疑似";
+        if (risk.is_proxy) tooltip_ += L"代理/VPN ";
+        if (risk.is_hosting) tooltip_ += L"机房IP";
+    } else {
+        tooltip_ += L"无明显风险";
+    }
+
+    tooltip_ += L"\nIP波动: 近30天";
+    tooltip_ += std::to_wstring(risk.distinct_ip_count_30d);
+    tooltip_ += L"个IP";
+    switch (risk.rotation_level) {
+        case claude_risk::RotationLevel::Notice: tooltip_ += L"（注意）"; break;
+        case claude_risk::RotationLevel::Warning: tooltip_ += L"（警告）"; break;
+        case claude_risk::RotationLevel::Severe: tooltip_ += L"（严重警告）"; break;
+        default: break;
+    }
+}
+
+void TMIpPlugin::ShowClaudeRiskReport(HWND hWnd) {
+    if (!options_.enable_claude_risk_check) {
+        MessageBoxW(hWnd, L"请先在插件设置中启用\"Claude IP风险检测\"。",
+                    L"Claude IP风险详情", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    auto risk = claude_risk::GetClaudeRiskSnapshot();
+    std::wstring report;
+    if (!risk.valid) {
+        report = L"检测中，请稍后重试。";
+    } else {
+        report = L"出口IP(Cloudflare视角): " + (risk.cf_ip.empty() ? L"未知" : risk.cf_ip) + L"\n";
+        report += L"机房代号: " + (risk.cf_colo.empty() ? L"未知" : risk.cf_colo) + L"\n";
+        report += L"与本机检测外网IP是否一致: " + std::wstring(risk.ip_mismatch ? L"不一致" : L"一致") + L"\n";
+        report += L"受限地区: ";
+        report += risk.country_restricted ? (L"命中 " + risk.restricted_country_code) : L"未命中";
+        report += L"\n直连api.anthropic.com: ";
+        switch (risk.direct_reachability) {
+            case claude_risk::Reachability::Reachable: report += L"可达"; break;
+            case claude_risk::Reachability::Blocked: report += L"被屏蔽(HTTP 403)"; break;
+            default: report += L"未知"; break;
+        }
+        report += L"\nVPN/代理: ";
+        report += risk.is_proxy ? L"是" : L"否";
+        report += L"\n机房/数据中心: ";
+        report += risk.is_hosting ? L"是" : L"否";
+        report += L"\n移动网络: ";
+        report += risk.is_mobile ? L"是" : L"否";
+        report += L"\n近30天出现过的不同外网IP数: " + std::to_wstring(risk.distinct_ip_count_30d);
+        report += L"\n\n注：受限地区名单与直连探测逻辑均为社区经验整理，不代表Anthropic官方实时政策，仅供参考。";
+    }
+
+    MessageBoxW(hWnd, report.c_str(), L"Claude IP风险详情", MB_OK | MB_ICONINFORMATION);
 }
 
 const wchar_t* TMIpPlugin::GetInfo(PluginInfoIndex index) {
@@ -151,11 +260,12 @@ const wchar_t* TMIpPlugin::GetCommandName(int command_index) {
     case 0: return L"显示内网IP"; // toggle
     case 1: return L"显示外网IP"; // toggle
     case 2: return L"刷新外网IP"; // one-shot refresh
+    case 3: return L"查看Claude IP风险详情";
     default: return L"";
     }
 }
 
-void TMIpPlugin::OnPluginCommand(int command_index, void* /*hWnd*/, void* /*para*/) {
+void TMIpPlugin::OnPluginCommand(int command_index, void* hWnd, void* /*para*/) {
     switch (command_index) {
     case 0:
         options_.show_internal = !options_.show_internal;
@@ -167,6 +277,9 @@ void TMIpPlugin::OnPluginCommand(int command_index, void* /*hWnd*/, void* /*para
         break;
     case 2:
         force_refresh_next_ = true;
+        break;
+    case 3:
+        ShowClaudeRiskReport((HWND)hWnd);
         break;
     default:
         break;
@@ -200,6 +313,9 @@ void TMIpPlugin::LoadOptions() {
 
         GetPrivateProfileStringW(L"ip", L"separator", L" | ", buf, (DWORD)std::size(buf), ini.c_str());
         options_.separator = buf;
+
+        options_.enable_claude_risk_check = GetPrivateProfileIntW(
+            L"ip", L"enable_claude_risk_check", options_.enable_claude_risk_check ? 1 : 0, ini.c_str()) != 0;
     }
 }
 
@@ -213,6 +329,8 @@ void TMIpPlugin::SaveOptions() {
     _itow_s((int)options_.external_refresh.count(), tmp, 10);
     WritePrivateProfileStringW(L"ip", L"external_refresh_minutes", tmp, ini.c_str());
     WritePrivateProfileStringW(L"ip", L"separator", options_.separator.c_str(), ini.c_str());
+    WritePrivateProfileStringW(L"ip", L"enable_claude_risk_check",
+                                options_.enable_claude_risk_check ? L"1" : L"0", ini.c_str());
 }
 
 // === IpPluginItem 自定义绘制函数实现 ===
