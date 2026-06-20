@@ -10,7 +10,7 @@
 
 ## 范围
 
-新增一个默认关闭的可选功能，整合5项检测，通过悬浮提示、紧凑标记和右键菜单命令展示，不对任何网络请求做实际拦截（本插件只读展示，不像claude-ip-guard会真正阻断Claude Code的请求）。
+新增一个默认关闭的可选功能，整合4项风险检测+1项纯展示信息（详见下方"设计修正"），通过悬浮提示、紧凑标记和右键菜单命令展示，不对任何网络请求做实际拦截（本插件只读展示，不像claude-ip-guard会真正阻断Claude Code的请求）。
 
 ## 架构
 
@@ -30,7 +30,7 @@
 
 刷新间隔固定为30分钟（不在UI中开放配置，保持开关粒度简单），但当检测到外网IP变化时提前触发一次刷新（复用 `ip_utils` 现有"网络变化"检测信号的思路）。
 
-**单次刷新内部的一致性**：一次后台线程执行完整走完全部5项检测，最终一次性加锁写入整个 `ClaudeRiskInfo` 结构体（而不是逐字段更新），保证结构体内各字段（尤其是 `cf_loc` 与受限地区判定结果）始终来自同一个时间点的同一次检测，不会出现"用旧的国家代码判定，却显示新的Cloudflare colo"之类的跨时间点矛盾。受限地区判定优先使用本次检测刚取到的 `cf_loc`；若Cloudflare trace请求失败，则回退使用调用方传入的 `current_external_ip` 对应的 `current_country`参数（同一次调用传入的值，时间点上与本次检测一致）。
+**单次刷新内部的一致性**：一次后台线程执行完整走完全部检测项，最终一次性加锁写入整个 `ClaudeRiskInfo` 结构体（而不是逐字段更新），保证结构体内各字段（尤其是 `cf_loc` 与受限地区判定结果）始终来自同一个时间点的同一次检测，不会出现"用旧的国家代码判定，却显示新的Cloudflare colo"之类的跨时间点矛盾。受限地区判定优先使用本次检测刚取到的 `cf_loc`；若Cloudflare trace请求失败，则回退使用调用方传入的 `current_external_ip` 对应的 `current_country`参数（同一次调用传入的值，时间点上与本次检测一致）。
 
 ## 数据结构
 
@@ -44,12 +44,12 @@ struct ClaudeRiskInfo {
     bool valid = false;                 // 是否已完成至少一次检测
     std::chrono::system_clock::time_point checked_at{};
 
-    // 1. Cloudflare出口视角对比
+    // 1. Cloudflare出口信息（纯展示，不参与风险判定，见下方"设计修正"）
     std::wstring cf_ip;                 // claude.ai/cdn-cgi/trace 的 ip=
     std::wstring cf_colo;               // colo=  (机房代号，如LAX)
-    std::wstring cf_loc;                // loc=   (Cloudflare判定的国家代码)
+    std::wstring cf_loc;                // loc=   (Cloudflare判定的国家代码，仍用于受限地区检测)
     bool cf_warp = false;               // warp=on/off
-    // 注：ip_mismatch（cf_ip 与插件检测到的外网IP是否不一致）字段已移除，见下方"设计修正"说明。
+    bool cf_trace_ok = false;           // trace请求是否成功
 
     // 2. 受限地区检测
     bool country_restricted = false;
@@ -80,10 +80,10 @@ void RequestClaudeRiskRefreshAsync(const std::wstring& config_dir,
 
 ## 各检测项实现细节
 
-### 1. Cloudflare出口视角对比
+### 1. Cloudflare出口信息（纯展示）
 - `GET https://claude.ai/cdn-cgi/trace`（WinHTTP，HTTPS，复用现有连接模式）
 - 响应为纯文本 `key=value` 逐行格式，解析 `ip=`、`colo=`、`loc=`、`warp=`
-- 与传入的 `current_external_ip` 比较，不一致则 `ip_mismatch = true`
+- `cf_ip`/`cf_colo` 仅作展示（"Claude出口IP/机房"），不与本机外网IP做一致性判断；`cf_loc` 仍用于下方"受限地区检测"
 
 示例响应：
 ```
@@ -131,7 +131,7 @@ CN RU KP IR SY CU BY VE MM LY SO YE ML CF SS CD ER AF UA
 
 ```
 ——Claude IP风险——
-出口对比: 一致 (LAX机房)        // 或 "不一致，可能存在分流代理"
+Claude出口: 69.63.196.167 (LAX机房)   // 纯展示，不作一致性判断
 受限地区: 未命中                 // 或 "命中：CN（仅供参考）"
 直连Claude: 可达                 // 或 "被屏蔽(403)" / "未知"
 风险属性: 无明显风险             // 或 "疑似机房/代理IP"
