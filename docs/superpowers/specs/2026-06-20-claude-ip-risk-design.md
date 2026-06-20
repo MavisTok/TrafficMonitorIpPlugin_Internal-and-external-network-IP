@@ -49,7 +49,7 @@ struct ClaudeRiskInfo {
     std::wstring cf_colo;               // colo=  (机房代号，如LAX)
     std::wstring cf_loc;                // loc=   (Cloudflare判定的国家代码)
     bool cf_warp = false;               // warp=on/off
-    bool ip_mismatch = false;           // cf_ip 与插件检测到的外网IP是否不一致
+    // 注：ip_mismatch（cf_ip 与插件检测到的外网IP是否不一致）字段已移除，见下方"设计修正"说明。
 
     // 2. 受限地区检测
     bool country_restricted = false;
@@ -92,6 +92,8 @@ colo=LAX
 loc=US
 warp=off
 ```
+
+**设计修正（2026-06-20，Task 14）**：上线后真实用户手动测试反馈，`ip_mismatch` 被当作"风险"展示（"不一致，可能存在分流代理"）并计入 `HasAnyRisk()` 是错误的产品判断——专门为Claude域名配置分流代理（只代理AI服务、其余流量直连）是常见且完全有意为之的正常用法，并不代表账号或网络存在风险。因此移除了 `ip_mismatch` 字段及其在 `HasAnyRisk()` 中的判定，`cf_ip`/`cf_colo` 改为纯展示信息（"Claude出口IP/机房"），不再与本机外网IP做一致性比较或给出任何风险措辞。`cf_loc` 不受影响，仍用于受限地区检测。功能描述从"5项风险检测"修正为"4项风险检测 + 1项纯展示信息"。
 
 ### 2. 受限地区检测
 硬编码19国名单（来源：`claude-ip-guard` 项目的 `BLOCKED_COUNTRIES`，综合Anthropic官方支持地区+OFAC出口管制名单）：

@@ -1,8 +1,8 @@
 /**
  * @file claude_risk.h
  * @brief Claude IP风险检测模块接口声明
- * @details 整合Cloudflare出口对比、受限地区检测、直连可达性探测、
- *          VPN/代理/机房风险查询、IP波动追踪五项检测。
+ * @details 整合受限地区检测、直连可达性探测、VPN/代理/机房风险查询、
+ *          IP波动追踪四项风险检测，外加Cloudflare出口信息纯展示（不参与风险判定）。
  *          所有网络检测在后台线程异步执行，调用方只读取缓存快照，不阻塞。
  * @author Lynn
  * @date 2026
@@ -22,13 +22,13 @@ struct ClaudeRiskInfo {
     bool valid = false;                 ///< 是否已完成至少一次检测
     std::chrono::system_clock::time_point checked_at{};
 
-    // 1. Cloudflare出口视角对比
+    // 1. Cloudflare出口信息（纯展示，不参与风险判定——很多用户故意只为Claude域名走分流代理，
+    //    出口IP与本机检测到的外网IP不一致是正常现象，不代表风险）
     std::wstring cf_ip;                 ///< claude.ai/cdn-cgi/trace 的 ip=
     std::wstring cf_colo;                ///< colo= (机房代号，如LAX)
-    std::wstring cf_loc;                 ///< loc=  (Cloudflare判定的国家代码)
+    std::wstring cf_loc;                 ///< loc=  (Cloudflare判定的国家代码，仍用于受限地区检测)
     bool cf_warp = false;                ///< warp=on/off
     bool cf_trace_ok = false;            ///< trace请求是否成功
-    bool ip_mismatch = false;            ///< cf_ip 与外网IP是否不一致
 
     // 2. 受限地区检测
     bool country_restricted = false;
@@ -49,7 +49,7 @@ struct ClaudeRiskInfo {
 
     /// 是否命中任意一项风险（用于紧凑标记显示判断）
     bool HasAnyRisk() const {
-        return ip_mismatch || country_restricted
+        return country_restricted
             || direct_reachability == Reachability::Blocked
             || is_proxy || is_hosting
             || rotation_level == RotationLevel::Warning

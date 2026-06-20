@@ -80,7 +80,7 @@ JP 154.31.113.180
 
 | 检测项 | 说明 |
 |--------|------|
-| Cloudflare出口对比 | 请求 `claude.ai/cdn-cgi/trace`，对比Cloudflare看到的出口IP与本机检测到的外网IP是否一致，用于发现分流代理 |
+| Cloudflare出口信息 | 请求 `claude.ai/cdn-cgi/trace`，展示Cloudflare看到的访问claude.ai时的出口IP与机房代号；纯展示，不作风险判断（许多用户特意为Claude配置分流代理，出口IP与本机外网IP不同是正常现象） |
 | 受限地区检测 | 将出口国家代码与Anthropic受限地区/OFAC制裁名单比对，仅提示不拦截 |
 | 直连可达性探测 | 对`api.anthropic.com`发起一次轻量探测请求（使用占位假Key，不消耗真实账号），判断网络层是否被屏蔽 |
 | VPN/代理/机房风险 | 通过`ip-api.com`查询当前外网IP是否为VPN/代理/数据中心/移动网络出口 |

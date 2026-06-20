@@ -130,13 +130,11 @@ void TMIpPlugin::AppendClaudeRiskTooltip() {
         return;
     }
 
-    tooltip_ += L"\n出口对比: ";
+    tooltip_ += L"\nClaude出口: ";
     if (!risk.cf_trace_ok) {
         tooltip_ += L"未知（请求失败）";
-    } else if (risk.ip_mismatch) {
-        tooltip_ += L"不一致，可能存在分流代理";
     } else {
-        tooltip_ += L"一致";
+        tooltip_ += risk.cf_ip.empty() ? L"未知" : risk.cf_ip;
         if (!risk.cf_colo.empty()) {
             tooltip_ += L" (";
             tooltip_ += risk.cf_colo;
@@ -196,7 +194,6 @@ void TMIpPlugin::ShowClaudeRiskReport(HWND hWnd) {
     } else {
         report = L"出口IP(Cloudflare视角): " + (risk.cf_ip.empty() ? L"未知" : risk.cf_ip) + L"\n";
         report += L"机房代号: " + (risk.cf_colo.empty() ? L"未知" : risk.cf_colo) + L"\n";
-        report += L"与本机检测外网IP是否一致: " + std::wstring(risk.ip_mismatch ? L"不一致" : L"一致") + L"\n";
         report += L"受限地区: ";
         report += risk.country_restricted ? (L"命中 " + risk.restricted_country_code) : L"未命中";
         report += L"\n直连api.anthropic.com: ";

@@ -261,7 +261,7 @@ void DoRefresh(std::wstring config_dir, std::wstring external_ip, std::wstring e
     ClaudeRiskInfo info;
     info.checked_at = std::chrono::system_clock::now();
 
-    // 1. Cloudflare出口视角对比
+    // 1. Cloudflare出口信息（纯展示，不参与风险判定）
     auto trace = HttpRequest(L"claude.ai", L"/cdn-cgi/trace", true, L"GET", {}, "", 5000);
     if (trace.ok && trace.status_code == 200) {
         info.cf_trace_ok = true;
@@ -269,9 +269,6 @@ void DoRefresh(std::wstring config_dir, std::wstring external_ip, std::wstring e
         info.cf_colo = ParseTraceField(trace.body, "colo");
         info.cf_loc = ParseTraceField(trace.body, "loc");
         info.cf_warp = (ParseTraceField(trace.body, "warp") == L"on");
-        if (!info.cf_ip.empty() && !external_ip.empty()) {
-            info.ip_mismatch = (info.cf_ip != external_ip);
-        }
     }
 
     // 2. 受限地区检测：优先用本次取到的cf_loc，否则回退调用方传入的country（同一次调用，时间点一致）
