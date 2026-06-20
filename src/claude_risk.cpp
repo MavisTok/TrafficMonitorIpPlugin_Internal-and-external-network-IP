@@ -31,6 +31,91 @@
 namespace claude_risk {
 
 namespace {
+
+struct HttpResult {
+    bool ok = false;
+    int status_code = 0;
+    std::string body;
+};
+
+HttpResult HttpRequest(const std::wstring& host, const std::wstring& path, bool use_https,
+                        const std::wstring& method,
+                        const std::vector<std::pair<std::wstring, std::wstring>>& headers,
+                        const std::string& body, unsigned timeout_ms) {
+    HttpResult result;
+
+    HINTERNET hSession = WinHttpOpen(L"TrafficMonitorIpPlugin/1.0",
+                                      WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return result;
+    WinHttpSetTimeouts(hSession, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
+
+    INTERNET_PORT port = use_https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), port, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); return result; }
+
+    DWORD flags = use_https ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, method.c_str(), path.c_str(), nullptr,
+                                             WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return result; }
+
+    std::wstring header_blob;
+    for (const auto& h : headers) {
+        header_blob += h.first + L": " + h.second + L"\r\n";
+    }
+
+    LPVOID send_data = body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.data();
+    DWORD send_len = (DWORD)body.size();
+
+    bool ok = !!WinHttpSendRequest(hRequest,
+                                    header_blob.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : header_blob.c_str(),
+                                    (DWORD)-1L, send_data, send_len, send_len, 0);
+    if (ok) ok = !!WinHttpReceiveResponse(hRequest, nullptr);
+
+    if (ok) {
+        DWORD status = 0, status_size = sizeof(status);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_FLAG_NUMBER | WINHTTP_QUERY_STATUS_CODE,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size, WINHTTP_NO_HEADER_INDEX);
+        result.status_code = (int)status;
+
+        std::string data;
+        DWORD dwSize = 0;
+        do {
+            dwSize = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+            if (dwSize == 0) break;
+            size_t old = data.size();
+            data.resize(old + dwSize);
+            DWORD dwRead = 0;
+            if (!WinHttpReadData(hRequest, const_cast<char*>(data.data()) + old, dwSize, &dwRead)) break;
+            data.resize(old + dwRead);
+        } while (dwSize > 0);
+
+        result.body = std::move(data);
+        result.ok = true;
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return result;
+}
+
+std::string ExtractJsonBool(const std::string& json, const std::string& field, bool* found) {
+    std::string pattern = "\"" + field + "\"";
+    size_t start = json.find(pattern);
+    *found = false;
+    if (start == std::string::npos) return "";
+    start += pattern.length();
+    while (start < json.length() && (json[start] == ':' || json[start] == ' ')) start++;
+    if (start + 4 <= json.length() && json.compare(start, 4, "true") == 0) { *found = true; return "true"; }
+    if (start + 5 <= json.length() && json.compare(start, 5, "false") == 0) { *found = true; return "false"; }
+    return "";
+}
+
+} // anonymous namespace
+
+namespace {
 // 名单来源：https://github.com/cso1z/claude-ip-guard (MIT License)
 // 综合Anthropic官方支持地区与OFAC出口管制名单整理，社区版本，仅供参考。
 const wchar_t* const kRestrictedCountries[] = {
