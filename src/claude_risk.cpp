@@ -30,6 +30,15 @@
 
 namespace claude_risk {
 
+namespace {
+// 名单来源：https://github.com/cso1z/claude-ip-guard (MIT License)
+// 综合Anthropic官方支持地区与OFAC出口管制名单整理，社区版本，仅供参考。
+const wchar_t* const kRestrictedCountries[] = {
+    L"CN", L"RU", L"KP", L"IR", L"SY", L"CU", L"BY", L"VE", L"MM",
+    L"LY", L"SO", L"YE", L"ML", L"CF", L"SS", L"CD", L"ER", L"AF", L"UA"
+};
+} // anonymous namespace
+
 std::wstring ParseTraceField(const std::string& trace_text, const std::string& field) {
     std::string pattern = field + "=";
     size_t pos = 0;
@@ -53,8 +62,14 @@ std::wstring ParseTraceField(const std::string& trace_text, const std::string& f
 }
 
 bool IsRestrictedCountry(const std::wstring& country_code) {
-    (void)country_code;
-    return false; // TODO Task 3
+    if (country_code.empty()) return false;
+    std::wstring upper = country_code;
+    std::transform(upper.begin(), upper.end(), upper.begin(),
+                   [](wchar_t c) { return (wchar_t)::towupper(c); });
+    for (const wchar_t* c : kRestrictedCountries) {
+        if (upper == c) return true;
+    }
+    return false;
 }
 
 RotationLevel ComputeRotationLevel(int distinct_ip_count) {
@@ -91,6 +106,16 @@ void RunSelfTests() {
         assert(ParseTraceField(sample, "colo") == L"LAX");
         assert(ParseTraceField(sample, "warp") == L"off");
         assert(ParseTraceField(sample, "missing_field") == L"");
+    }
+
+    // --- IsRestrictedCountry ---
+    {
+        assert(IsRestrictedCountry(L"CN") == true);
+        assert(IsRestrictedCountry(L"cn") == true);  // 大小写不敏感
+        assert(IsRestrictedCountry(L"RU") == true);
+        assert(IsRestrictedCountry(L"UA") == true);  // 名单最后一项
+        assert(IsRestrictedCountry(L"US") == false);
+        assert(IsRestrictedCountry(L"") == false);
     }
 }
 
