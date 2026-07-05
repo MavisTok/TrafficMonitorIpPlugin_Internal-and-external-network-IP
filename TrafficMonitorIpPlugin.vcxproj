@@ -95,6 +95,7 @@
     <ClCompile Include="src\ip_utils.cpp" />
     <ClCompile Include="src\options_dialog.cpp" />
     <ClCompile Include="src\plugin.cpp" />
+    <ClCompile Include="src\proxy_watch.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="PluginInterface.h" />
@@ -104,6 +105,7 @@
     <ClInclude Include="src\options_dialog.h" />
     <ClInclude Include="src\plugin.h" />
     <ClInclude Include="src\plugin_options.h" />
+    <ClInclude Include="src\proxy_watch.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="res\plugin.rc" />

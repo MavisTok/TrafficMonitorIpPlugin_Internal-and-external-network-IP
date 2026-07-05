@@ -23,12 +23,12 @@ struct PluginOptions {
     
     // === 网络设置 ===
     std::wstring preferred_adapter;                     ///< 首选网络适配器（FriendlyName或AdapterName）
-    std::chrono::minutes external_refresh{5};          ///< 外网IP标准刷新间隔（分钟）
-    
+    std::chrono::minutes external_refresh{2};          ///< 外网IP标准刷新间隔（分钟）
+
     // === 智能缓存设置 ===
     bool enable_smart_cache = true;                     ///< 启用智能缓存（推荐）
     std::chrono::seconds fast_refresh{30};             ///< 网络变化后快速刷新间隔（秒）
-    std::chrono::minutes max_refresh{15};              ///< 稳定期最大刷新间隔（分钟）
+    std::chrono::minutes max_refresh{5};               ///< 稳定期最大刷新间隔（分钟）
 
     // === Claude IP风险检测 ===
     bool enable_claude_risk_check = false;              ///< 启用Claude IP风险检测（默认关闭）

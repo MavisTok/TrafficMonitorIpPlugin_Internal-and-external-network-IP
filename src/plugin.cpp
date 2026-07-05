@@ -16,6 +16,7 @@
 #include <Shlwapi.h>        // Shell轻量级实用程序API（用于路径操作）
 #include "options_dialog.h"  // 选项对话框
 #include "claude_risk.h"
+#include "proxy_watch.h"     // 代理软件窗口打开/关闭监控
 
 #pragma comment(lib, "Shlwapi.lib")  // 链接Shell轻量级实用程序库
 
@@ -65,8 +66,8 @@ IPluginItem* TMIpPlugin::GetItem(int index) {
 
 void TMIpPlugin::DataRequired() {
     text_provider_.SetOptions(options_);
-    bool force_refresh_requested = force_refresh_next_;
-    item_.Update(force_refresh_next_);
+    bool force_refresh_requested = force_refresh_next_ || proxywatch::ConsumeTriggerFlag();
+    item_.Update(force_refresh_requested);
     force_refresh_next_ = false;
 
     if (options_.enable_claude_risk_check) {
@@ -248,6 +249,7 @@ void TMIpPlugin::OnInitialize(ITrafficMonitor* pApp) {
         if (dir) config_dir_ = dir;
     }
     LoadOptions();
+    proxywatch::StartWatching();
 }
 
 const wchar_t* TMIpPlugin::GetTooltipInfo() {
@@ -319,7 +321,7 @@ void TMIpPlugin::LoadOptions() {
         options_.preferred_adapter = buf;
 
         int minutes = GetPrivateProfileIntW(L"ip", L"external_refresh_minutes", (int)options_.external_refresh.count(), ini.c_str());
-        if (minutes <= 0) minutes = 5;
+        if (minutes <= 0) minutes = 2;
         options_.external_refresh = std::chrono::minutes(minutes);
 
         GetPrivateProfileStringW(L"ip", L"separator", L" | ", buf, (DWORD)std::size(buf), ini.c_str());

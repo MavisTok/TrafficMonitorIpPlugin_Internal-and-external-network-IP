@@ -132,9 +132,9 @@ struct ExternalIpOptions {
     
     // 智能缓存配置
     CacheStrategy strategy = CacheStrategy::HYBRID;                     // 缓存策略
-    std::chrono::milliseconds min_refresh{ std::chrono::minutes(5) };   // 标准刷新间隔
+    std::chrono::milliseconds min_refresh{ std::chrono::minutes(2) };   // 标准刷新间隔
     std::chrono::milliseconds fast_refresh{ std::chrono::seconds(30) }; // 快速刷新间隔
-    std::chrono::milliseconds max_refresh{ std::chrono::minutes(15) };  // 最大刷新间隔
+    std::chrono::milliseconds max_refresh{ std::chrono::minutes(5) };   // 最大刷新间隔
     int adaptive_cycles = 6;                                            // 快速模式持续周期数
 };
 

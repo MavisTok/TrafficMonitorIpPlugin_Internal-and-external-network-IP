@@ -7,9 +7,10 @@
 - **双IP显示**：同时显示内网IP和外网IP（含国家代码）
 - **供应商显示**：内网关闭时智能显示外网IP供应商名称
 - **垂直布局**：内网IP在上，外网IP在下，节省任务栏空间
-- **智能缓存**：网络变化时快速响应（30秒），稳定时节能运行（5-15分钟）
+- **智能缓存**：网络变化时快速响应（30秒），稳定时节能运行（2-5分钟）
 - **国家标识**：外网IP前显示国家代码（CN、US、JP等）
 - **网络优先级**：智能选择最佳内网IP（192.168.x.x > 10.x.x.x > 172.16-31.x.x）
+- **代理软件监控**：检测到Clash、V2rayN等常见代理软件窗口打开/关闭/切换前台时，自动触发一次外网IP强制刷新，切换代理节点后无需等待缓存过期
 - **Claude IP风险检测**（可选，默认关闭）：对比Cloudflare出口IP、检测受限地区、探测Claude直连可达性、识别VPN/代理/机房IP、追踪30天IP波动
 
 ## 📦 快速安装
@@ -74,6 +75,18 @@ JP 154.31.113.180
 3. **去除后缀**：移除常见的公司后缀（Inc.、LLC、Services等）
 4. **保持简洁**：确保显示内容适合任务栏空间
 
+## 🛰️ 代理软件自动检测刷新
+
+切换代理节点（如Clash分流规则）后，外网出口IP会变化，但插件默认按缓存间隔刷新，可能要等几分钟才能看到新IP。为此插件会在后台注册一个全局窗口事件钩子，监控常见代理软件窗口的**前台切换 / 显示或隐藏 / 最小化还原**，命中时立即触发一次外网IP强制刷新（无需等待缓存过期）。
+
+### 已支持的代理软件（按可执行文件名匹配）
+`clash.exe`、`clash-verge.exe`、`Clash Verge.exe`、`clash-verge-service.exe`、`mihomo.exe`、`mihomo-party.exe`、`Clash Party.exe`（Mihomo Party改名后的可执行文件）、`FlClash.exe`、`v2rayN.exe`、`v2rayNG.exe`、`Netch.exe`、`Qv2ray.exe`、`nekoray.exe`、`NekoBox.exe`、`sagernet.exe`、`Shadowsocks.exe`、`ss-win.exe`、`Proxifier.exe`、`ClashX.exe`
+
+### 注意事项
+- 该功能无需配置，插件初始化时自动在独立线程启动，随进程退出自然回收。
+- 如果你使用的代理软件不在上述列表中，或软件更新后重命名了可执行文件（例如"Mihomo Party"目前的可执行文件名是`Clash Party.exe`而非`mihomo-party.exe`），自动触发会失效，需要在`src/proxy_watch.cpp`的`kWatchedProcessNames`数组中补充对应文件名后重新编译；也可以直接用右键菜单"刷新外网IP"手动触发。
+- 全局窗口钩子受Windows UIPI限制：若代理软件以管理员权限运行，而TrafficMonitor以普通用户权限运行，钩子将无法收到该软件的窗口事件（这是Windows的完整性级别隔离机制，非插件缺陷）。
+
 ## 🔍 Claude IP风险检测（可选功能）
 
 默认关闭，需在插件设置中勾选"启用Claude IP风险检测"。启用后会增加以下检测，结果显示在悬浮提示和右键菜单"查看Claude IP风险详情"中：
@@ -111,14 +124,15 @@ JP 154.31.113.180
 ### 网络变化检测
 - 自动检测内网IP变化（网络切换、VPN连接等）
 - 变化时立即获取新的外网IP，然后进入30秒快速验证模式
-- 连续6次验证后恢复正常5分钟间隔
+- 连续6次验证后恢复正常2分钟间隔
 
 ### 响应速度对比
 | 场景 | 传统固定模式 | 智能模式 |
 |------|------------|---------|
-| 网络切换 | 最长5分钟 | **立即+30秒** |
-| VPN切换 | 最长5分钟 | **立即+30秒** |  
-| 稳定使用 | 5分钟固定 | 5-15分钟自适应 |
+| 网络切换 | 最长2分钟 | **立即+30秒** |
+| VPN切换 | 最长2分钟 | **立即+30秒** |  
+| 代理软件窗口事件 | 需等缓存过期 | **立即触发刷新** |
+| 稳定使用 | 2分钟固定 | 2-5分钟自适应 |
 
 ## 🔧 技术特性
 
@@ -138,11 +152,11 @@ JP 154.31.113.180
 show_internal=1                # 显示内网IP
 show_external=1                # 显示外网IP  
 preferred_adapter=             # 首选网络适配器
-external_refresh_minutes=5     # 标准刷新间隔
+external_refresh_minutes=2     # 标准刷新间隔
 separator= | #                 # IP分隔符
 enable_smart_cache=1           # 启用智能缓存
 fast_refresh_seconds=30        # 快速刷新间隔
-max_refresh_minutes=15         # 最大刷新间隔
+max_refresh_minutes=5          # 最大刷新间隔
 enable_claude_risk_check=0     # 启用Claude IP风险检测（默认关闭）
 ```
 
@@ -158,6 +172,12 @@ enable_claude_risk_check=0     # 启用Claude IP风险检测（默认关闭）
 1. 在插件设置中指定首选网络适配器
 2. 选择状态为"已连接"的适配器
 3. 重启TrafficMonitor重新检测网络
+
+### 切换代理节点后外网IP没有自动刷新
+1. 确认所用代理软件的可执行文件名在"代理软件自动检测刷新"一节的已支持列表中——软件更新可能改了可执行文件名（例如"Mihomo Party"目前叫`Clash Party.exe`）
+2. 若不在列表中，右键菜单选择"刷新外网IP"手动触发，或在`src/proxy_watch.cpp`补充文件名后重新编译
+3. 确认代理软件与TrafficMonitor的运行权限一致（都不以管理员身份运行，或都以管理员身份运行）——Windows的UIPI机制会阻止普通权限进程接收管理员权限窗口的事件
+4. **重新编译后别忘了替换`plugins`目录里的DLL并重启TrafficMonitor**——Windows不会热更新已加载的插件文件
 
 ## 📊 系统要求
 
@@ -187,6 +207,7 @@ enable_claude_risk_check=0     # 启用Claude IP风险检测（默认关闭）
 ### 项目结构
 - `PluginInterface.h`：TrafficMonitor插件接口
 - `src/ip_utils.h/.cpp`：IP获取和智能缓存逻辑
+- `src/proxy_watch.h/.cpp`：代理软件窗口打开/关闭监控，命中时触发外网IP强制刷新
 - `src/claude_risk.h/.cpp`：Claude IP风险检测逻辑（Cloudflare对比、受限地区、直连探测、VPN/代理识别、IP波动追踪）
 - `src/plugin_options.h`：用户配置选项定义  
 - `src/plugin.h/.cpp`：插件主体实现

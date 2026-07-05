@@ -96,26 +96,41 @@ static void SetupAdapterCombo(HWND hDlg, int id, const std::wstring& currentAdap
     // Add "自动选择" as first item
     SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)L"自动选择");
     SendMessage(hCombo, CB_SETITEMDATA, 0, (LPARAM)0); // Data = 0 for auto
-    
+
     // Get adapters and add them
     auto adapters = GetNetworkAdapters();
-    int selectedIndex = 0; // Default to "自动选择"
-    
+
     for (size_t i = 0; i < adapters.size(); ++i) {
         int index = (int)SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)adapters[i].displayName.c_str());
         if (index != CB_ERR) {
             // Store adapter info as item data (index + 1 to distinguish from auto=0)
             SendMessage(hCombo, CB_SETITEMDATA, index, (LPARAM)(i + 1));
-            
-            // Check if this is the currently selected adapter
-            if (!currentAdapter.empty() && 
-                (currentAdapter == adapters[i].friendlyName || 
-                 currentAdapter == adapters[i].adapterName)) {
-                selectedIndex = index;
-            }
         }
     }
-    
+
+    // 找出应该被选中的itemData（0=自动选择，否则为匹配到的适配器序号+1）
+    LPARAM wantedData = 0;
+    for (size_t i = 0; i < adapters.size(); ++i) {
+        if (!currentAdapter.empty() &&
+            (currentAdapter == adapters[i].friendlyName ||
+             currentAdapter == adapters[i].adapterName)) {
+            wantedData = (LPARAM)(i + 1);
+            break;
+        }
+    }
+
+    // 所有条目都插入完毕后（CBS_SORT不会再重新排序），itemData -> 最终下标的映射才是稳定的。
+    // 不能复用插入过程中CB_ADDSTRING返回的下标：CBS_SORT会在后续插入时把已有条目挤到新位置，
+    // 导致之前记录的下标失效，CB_SETCURSEL选中错误的项。
+    int selectedIndex = 0;
+    int count = (int)SendMessage(hCombo, CB_GETCOUNT, 0, 0);
+    for (int idx = 0; idx < count; ++idx) {
+        if (SendMessage(hCombo, CB_GETITEMDATA, idx, 0) == wantedData) {
+            selectedIndex = idx;
+            break;
+        }
+    }
+
     SendMessage(hCombo, CB_SETCURSEL, selectedIndex, 0);
 }
 
@@ -168,9 +183,9 @@ static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
             new_opts.preferred_adapter = GetSelectedAdapter(hDlg, IDC_EDIT_ADAPTER);
             {
                 std::wstring s = GetEdit(hDlg, IDC_EDIT_REFRESH);
-                int m = 5;
+                int m = 2;
                 try { m = std::stoi(s); } catch (...) {}
-                if (m <= 0) m = 5;
+                if (m <= 0) m = 2;
                 if (m > 1440) m = 1440;
                 new_opts.external_refresh = std::chrono::minutes(m);
             }

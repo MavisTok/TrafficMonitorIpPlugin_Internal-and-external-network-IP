@@ -26,6 +26,9 @@
     <ClCompile Include="src\plugin.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="src\proxy_watch.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="PluginInterface.h">
@@ -47,6 +50,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="src\plugin_options.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="src\proxy_watch.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
