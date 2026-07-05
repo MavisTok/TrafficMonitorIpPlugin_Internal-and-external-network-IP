@@ -101,6 +101,48 @@ HttpResult HttpRequest(const std::wstring& host, const std::wstring& path, bool 
     return result;
 }
 
+std::wstring Utf8ToWide(const std::string& value) {
+    if (value.empty()) return L"";
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), (int)value.size(), nullptr, 0);
+    if (wlen <= 0) return L"";
+    std::wstring wvalue(wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), (int)value.size(),
+                         const_cast<wchar_t*>(wvalue.data()), wlen);
+    return wvalue;
+}
+
+std::string ExtractJsonString(const std::string& json, const std::string& field) {
+    std::string pattern = "\"" + field + "\"";
+    size_t start = json.find(pattern);
+    if (start == std::string::npos) return "";
+    start += pattern.length();
+    while (start < json.length() && (json[start] == ':' || json[start] == ' ' || json[start] == '\t')) start++;
+    if (start >= json.length() || json[start] != '"') return "";
+    start++;
+
+    std::string value;
+    bool escaped = false;
+    for (size_t i = start; i < json.length(); ++i) {
+        char ch = json[i];
+        if (escaped) {
+            value.push_back(ch);
+            escaped = false;
+            continue;
+        }
+        if (ch == '\\') {
+            escaped = true;
+            continue;
+        }
+        if (ch == '"') return value;
+        value.push_back(ch);
+    }
+    return "";
+}
+
+std::wstring ParseIpInfoOrgFieldImpl(const std::string& json) {
+    return Utf8ToWide(ExtractJsonString(json, "org"));
+}
+
 std::string ExtractJsonBool(const std::string& json, const std::string& field, bool* found) {
     std::string pattern = "\"" + field + "\"";
     size_t start = json.find(pattern);
@@ -114,6 +156,10 @@ std::string ExtractJsonBool(const std::string& json, const std::string& field, b
 }
 
 } // anonymous namespace
+
+std::wstring ParseIpInfoOrgField(const std::string& json) {
+    return ParseIpInfoOrgFieldImpl(json);
+}
 
 namespace {
 // 名单来源：https://github.com/cso1z/claude-ip-guard (MIT License)
@@ -271,6 +317,14 @@ void DoRefresh(std::wstring config_dir, std::wstring external_ip, std::wstring e
         info.cf_warp = (ParseTraceField(trace.body, "warp") == L"on");
     }
 
+    if (!info.cf_ip.empty()) {
+        std::wstring path = L"/" + info.cf_ip + L"/json";
+        auto ipinfo = HttpRequest(L"ipinfo.io", path, true, L"GET", {}, "", 5000);
+        if (ipinfo.ok && ipinfo.status_code == 200) {
+            info.cf_as_name = ParseIpInfoOrgField(ipinfo.body);
+        }
+    }
+
     // 2. 受限地区检测：优先用本次取到的cf_loc，否则回退调用方传入的country（同一次调用，时间点一致）
     std::wstring country_for_check = !info.cf_loc.empty() ? info.cf_loc : external_country;
     info.country_restricted = IsRestrictedCountry(country_for_check);
@@ -389,6 +443,14 @@ void RunSelfTests() {
         assert(ComputeRotationLevel(7) == RotationLevel::Severe);
         assert(ComputeRotationLevel(100) == RotationLevel::Severe);
         assert(ComputeRotationLevel(0) == RotationLevel::None);
+    }
+
+    // --- ParseIpInfoOrgField ---
+    {
+        std::string sample =
+            "{\"ip\":\"69.63.196.167\",\"country\":\"US\","
+            "\"org\":\"AS13335 Cloudflare, Inc.\"}";
+        assert(ParseIpInfoOrgField(sample) == L"AS13335 Cloudflare, Inc.");
     }
 
     // --- UpdateAndCountHistory: 去重 + 30天窗口 ---

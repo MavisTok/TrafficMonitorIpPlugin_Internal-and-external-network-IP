@@ -27,6 +27,7 @@ struct ClaudeRiskInfo {
     std::wstring cf_ip;                 ///< claude.ai/cdn-cgi/trace 的 ip=
     std::wstring cf_colo;                ///< colo= (机房代号，如LAX)
     std::wstring cf_loc;                 ///< loc=  (Cloudflare判定的国家代码，仍用于受限地区检测)
+    std::wstring cf_as_name;             ///< Claude出口IP对应的网络运营商(org)
     bool cf_warp = false;                ///< warp=on/off
     bool cf_trace_ok = false;            ///< trace请求是否成功
 
@@ -70,6 +71,9 @@ void RequestClaudeRiskRefreshAsync(const std::wstring& config_dir,
 
 /// 解析cdn-cgi/trace纯文本响应（key=value逐行），取出指定字段；未找到返回空字符串
 std::wstring ParseTraceField(const std::string& trace_text, const std::string& field);
+
+/// 解析ipinfo.io JSON响应中的org字段；未找到返回空字符串
+std::wstring ParseIpInfoOrgField(const std::string& json);
 
 /// 判断国家代码（不区分大小写）是否在受限名单中
 bool IsRestrictedCountry(const std::wstring& country_code);

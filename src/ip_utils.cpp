@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file ip_utils.cpp
  * @brief TrafficMonitor IP插件的IP地址获取工具实现
  * @details 包含内网IPv4地址获取和外网IPv4地址获取的核心功能
@@ -30,6 +30,109 @@
 #pragma comment(lib, "Iphlpapi.lib")  // IP Helper API库
 #pragma comment(lib, "Ws2_32.lib")    // Winsock 2.0库
 #pragma comment(lib, "Winhttp.lib")   // WinHTTP库
+
+static wchar_t* DuplicateWideString(LPCWSTR value) {
+    if (!value || !*value) return nullptr;
+    const size_t length = wcslen(value);
+    wchar_t* copy = new wchar_t[length + 1];
+    wcscpy_s(copy, length + 1, value);
+    return copy;
+}
+
+static void FreeProxyInfo(WINHTTP_PROXY_INFO& proxy_info) {
+    delete[] proxy_info.lpszProxy;
+    delete[] proxy_info.lpszProxyBypass;
+    proxy_info = {};
+}
+
+static void FreeIeProxyConfig(WINHTTP_CURRENT_USER_IE_PROXY_CONFIG& ie_proxy) {
+    if (ie_proxy.lpszAutoConfigUrl) {
+        GlobalFree(ie_proxy.lpszAutoConfigUrl);
+        ie_proxy.lpszAutoConfigUrl = nullptr;
+    }
+    if (ie_proxy.lpszProxy) {
+        GlobalFree(ie_proxy.lpszProxy);
+        ie_proxy.lpszProxy = nullptr;
+    }
+    if (ie_proxy.lpszProxyBypass) {
+        GlobalFree(ie_proxy.lpszProxyBypass);
+        ie_proxy.lpszProxyBypass = nullptr;
+    }
+}
+
+static bool BuildProxyInfoFromIeConfigForUrl(
+    const WINHTTP_CURRENT_USER_IE_PROXY_CONFIG& ie_proxy,
+    LPCWSTR url,
+    WINHTTP_PROXY_INFO& proxy_info) {
+    proxy_info = {};
+
+    if (ie_proxy.lpszProxy && *ie_proxy.lpszProxy) {
+        proxy_info.dwAccessType = WINHTTP_ACCESS_TYPE_NAMED_PROXY;
+        proxy_info.lpszProxy = DuplicateWideString(ie_proxy.lpszProxy);
+        proxy_info.lpszProxyBypass = DuplicateWideString(ie_proxy.lpszProxyBypass);
+        return proxy_info.lpszProxy != nullptr;
+    }
+
+    if (!url || !*url || (!ie_proxy.fAutoDetect && !ie_proxy.lpszAutoConfigUrl)) {
+        return false;
+    }
+
+    WINHTTP_AUTOPROXY_OPTIONS auto_proxy_options{};
+    if (ie_proxy.fAutoDetect) {
+        auto_proxy_options.dwFlags |= WINHTTP_AUTOPROXY_AUTO_DETECT;
+        auto_proxy_options.dwAutoDetectFlags =
+            WINHTTP_AUTO_DETECT_TYPE_DHCP | WINHTTP_AUTO_DETECT_TYPE_DNS_A;
+    }
+    if (ie_proxy.lpszAutoConfigUrl && *ie_proxy.lpszAutoConfigUrl) {
+        auto_proxy_options.dwFlags |= WINHTTP_AUTOPROXY_CONFIG_URL;
+        auto_proxy_options.lpszAutoConfigUrl = ie_proxy.lpszAutoConfigUrl;
+    }
+    auto_proxy_options.fAutoLogonIfChallenged = TRUE;
+
+    HINTERNET hSession = WinHttpOpen(L"TrafficMonitorIpPlugin/1.0",
+                                     WINHTTP_ACCESS_TYPE_NO_PROXY,
+                                     WINHTTP_NO_PROXY_NAME,
+                                     WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return false;
+
+    WINHTTP_PROXY_INFO detected_proxy{};
+    const bool detected = !!WinHttpGetProxyForUrl(
+        hSession, url, &auto_proxy_options, &detected_proxy);
+    WinHttpCloseHandle(hSession);
+
+    if (!detected || detected_proxy.dwAccessType != WINHTTP_ACCESS_TYPE_NAMED_PROXY ||
+        !detected_proxy.lpszProxy || !*detected_proxy.lpszProxy) {
+        if (detected_proxy.lpszProxy) GlobalFree(detected_proxy.lpszProxy);
+        if (detected_proxy.lpszProxyBypass) GlobalFree(detected_proxy.lpszProxyBypass);
+        return false;
+    }
+
+    proxy_info.dwAccessType = detected_proxy.dwAccessType;
+    proxy_info.lpszProxy = DuplicateWideString(detected_proxy.lpszProxy);
+    proxy_info.lpszProxyBypass = DuplicateWideString(detected_proxy.lpszProxyBypass);
+    GlobalFree(detected_proxy.lpszProxy);
+    if (detected_proxy.lpszProxyBypass) GlobalFree(detected_proxy.lpszProxyBypass);
+    return proxy_info.lpszProxy != nullptr;
+}
+
+static bool ApplyCurrentUserProxyForRequest(HINTERNET hRequest, LPCWSTR url) {
+    WINHTTP_CURRENT_USER_IE_PROXY_CONFIG ie_proxy{};
+    if (!WinHttpGetIEProxyConfigForCurrentUser(&ie_proxy)) {
+        return false;
+    }
+
+    WINHTTP_PROXY_INFO proxy_info{};
+    const bool has_proxy = BuildProxyInfoFromIeConfigForUrl(ie_proxy, url, proxy_info);
+    bool applied = false;
+    if (has_proxy) {
+        applied = !!WinHttpSetOption(
+            hRequest, WINHTTP_OPTION_PROXY, &proxy_info, sizeof(proxy_info));
+    }
+
+    FreeProxyInfo(proxy_info);
+    FreeIeProxyConfig(ie_proxy);
+    return applied;
+}
 
 namespace iputils {
 
@@ -367,6 +470,11 @@ IpWithCountry GetExternalIPv4WithCountry(const ExternalIpOptions& opt, bool forc
         return result; 
     }
 
+    std::wstring request_url = L"https://";
+    request_url += opt.host;
+    request_url += opt.path;
+    ApplyCurrentUserProxyForRequest(hRequest, request_url.c_str());
+
     // 步骤4: 发送HTTP请求并接收响应
     bool ok = !!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                                    WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
@@ -469,4 +577,6 @@ std::wstring GetExternalIPv4(const ExternalIpOptions& opt, bool force_refresh) {
 }
 
 } // namespace iputils
+
+
 

@@ -36,6 +36,14 @@ static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
     return r;
 }
 
+static std::wstring FormatProviderName(const std::wstring& as_name) {
+    if (as_name.empty()) return L"";
+    iputils::IpWithCountry info;
+    info.as_name = as_name;
+    std::wstring company = info.GetCompanyName();
+    return company.empty() ? as_name : company;
+}
+
 /**
  * @brief TMIpPlugin构造函数
  * @details 初始化插件实例，加载配置选项
@@ -142,6 +150,10 @@ void TMIpPlugin::AppendClaudeRiskTooltip() {
         }
     }
 
+    tooltip_ += L"\n网络运营商: ";
+    std::wstring provider_name = FormatProviderName(risk.cf_as_name);
+    tooltip_ += provider_name.empty() ? L"未知" : provider_name;
+
     tooltip_ += L"\n受限地区: ";
     if (risk.country_restricted) {
         tooltip_ += L"命中：";
@@ -194,6 +206,8 @@ void TMIpPlugin::ShowClaudeRiskReport(HWND hWnd) {
     } else {
         report = L"出口IP(Cloudflare视角): " + (risk.cf_ip.empty() ? L"未知" : risk.cf_ip) + L"\n";
         report += L"机房代号: " + (risk.cf_colo.empty() ? L"未知" : risk.cf_colo) + L"\n";
+        std::wstring provider_name = FormatProviderName(risk.cf_as_name);
+        report += L"网络运营商: " + (provider_name.empty() ? std::wstring(L"未知") : provider_name) + L"\n";
         report += L"受限地区: ";
         report += risk.country_restricted ? (L"命中 " + risk.restricted_country_code) : L"未命中";
         report += L"\n直连api.anthropic.com: ";
