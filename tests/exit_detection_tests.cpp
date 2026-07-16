@@ -19,6 +19,20 @@ void Check(bool condition, const char* expression, const char* file, int line) {
 #define CHECK(expression) Check(static_cast<bool>(expression), #expression, __FILE__, __LINE__)
 
 int main() {
+    using namespace std::chrono;
+
+    CHECK(EvaluateRefresh(false, false, steady_clock::duration::zero(), false) ==
+          RefreshDecision::Start);
+    CHECK(EvaluateRefresh(true, false, minutes(9), false) == RefreshDecision::Skip);
+    CHECK(EvaluateRefresh(true, false, minutes(10), false) == RefreshDecision::Start);
+    CHECK(EvaluateRefresh(true, false, minutes(1), true) == RefreshDecision::Start);
+    CHECK(EvaluateRefresh(true, true, minutes(10), false) == RefreshDecision::Skip);
+    CHECK(EvaluateRefresh(true, true, minutes(1), true) == RefreshDecision::QueueForced);
+    CHECK(EvaluateRefresh(true, false, minutes(10) - steady_clock::duration(1), false) ==
+          RefreshDecision::Skip);
+    CHECK(EvaluateRefresh(true, false, minutes(10), false) == RefreshDecision::Start);
+    CHECK(EvaluateRefresh(true, false, -minutes(1), false) == RefreshDecision::Skip);
+
     CHECK(NormalizeCountryCode(L"jp") == L"JP");
     CHECK(NormalizeCountryCode(L"USA").empty());
     CHECK(NormalizeCountryCode(L"1P").empty());

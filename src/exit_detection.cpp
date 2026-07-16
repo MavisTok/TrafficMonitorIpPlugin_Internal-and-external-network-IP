@@ -2,13 +2,347 @@
 #include "exit_detection.h"
 
 #include <Windows.h>
+#include <winhttp.h>
 
 #include <algorithm>
 #include <cctype>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <thread>
 #include <unordered_map>
+#include <vector>
+
+#pragma comment(lib, "Winhttp.lib")
 
 namespace exit_detection {
 namespace {
+
+constexpr std::size_t kMaximumResponseBytes = 1024u * 1024u;
+constexpr auto kRefreshInterval = std::chrono::minutes(10);
+
+struct InternetHandleCloser {
+    void operator()(void* handle) const noexcept {
+        if (handle != nullptr) {
+            WinHttpCloseHandle(handle);
+        }
+    }
+};
+
+using InternetHandle = std::unique_ptr<void, InternetHandleCloser>;
+
+struct HttpResponse {
+    bool ok = false;
+    DWORD status = 0;
+    std::string body;
+    std::string headers;
+};
+
+wchar_t* DuplicateWideString(LPCWSTR value) {
+    if (value == nullptr || *value == L'\0') {
+        return nullptr;
+    }
+    const std::size_t length = wcslen(value);
+    std::unique_ptr<wchar_t[]> copy(new (std::nothrow) wchar_t[length + 1]);
+    if (!copy) {
+        return nullptr;
+    }
+    wcscpy_s(copy.get(), length + 1, value);
+    return copy.release();
+}
+
+void FreeProxyInfo(WINHTTP_PROXY_INFO& proxy_info) noexcept {
+    delete[] proxy_info.lpszProxy;
+    delete[] proxy_info.lpszProxyBypass;
+    proxy_info = {};
+}
+
+void FreeIeProxyConfig(WINHTTP_CURRENT_USER_IE_PROXY_CONFIG& ie_proxy) noexcept {
+    if (ie_proxy.lpszAutoConfigUrl != nullptr) {
+        GlobalFree(ie_proxy.lpszAutoConfigUrl);
+    }
+    if (ie_proxy.lpszProxy != nullptr) {
+        GlobalFree(ie_proxy.lpszProxy);
+    }
+    if (ie_proxy.lpszProxyBypass != nullptr) {
+        GlobalFree(ie_proxy.lpszProxyBypass);
+    }
+    ie_proxy = {};
+}
+
+struct ProxyInfoOwner {
+    WINHTTP_PROXY_INFO value{};
+    ~ProxyInfoOwner() { FreeProxyInfo(value); }
+};
+
+struct IeProxyConfigOwner {
+    WINHTTP_CURRENT_USER_IE_PROXY_CONFIG value{};
+    ~IeProxyConfigOwner() { FreeIeProxyConfig(value); }
+};
+
+bool BuildProxyInfoFromIeConfigForUrl(
+    const WINHTTP_CURRENT_USER_IE_PROXY_CONFIG& ie_proxy,
+    LPCWSTR url,
+    WINHTTP_PROXY_INFO& proxy_info) {
+    proxy_info = {};
+    if (ie_proxy.lpszProxy != nullptr && *ie_proxy.lpszProxy != L'\0') {
+        proxy_info.dwAccessType = WINHTTP_ACCESS_TYPE_NAMED_PROXY;
+        proxy_info.lpszProxy = DuplicateWideString(ie_proxy.lpszProxy);
+        proxy_info.lpszProxyBypass = DuplicateWideString(ie_proxy.lpszProxyBypass);
+        return proxy_info.lpszProxy != nullptr;
+    }
+    if (url == nullptr || *url == L'\0' ||
+        (!ie_proxy.fAutoDetect && ie_proxy.lpszAutoConfigUrl == nullptr)) {
+        return false;
+    }
+
+    WINHTTP_AUTOPROXY_OPTIONS options{};
+    if (ie_proxy.fAutoDetect) {
+        options.dwFlags |= WINHTTP_AUTOPROXY_AUTO_DETECT;
+        options.dwAutoDetectFlags =
+            WINHTTP_AUTO_DETECT_TYPE_DHCP | WINHTTP_AUTO_DETECT_TYPE_DNS_A;
+    }
+    if (ie_proxy.lpszAutoConfigUrl != nullptr && *ie_proxy.lpszAutoConfigUrl != L'\0') {
+        options.dwFlags |= WINHTTP_AUTOPROXY_CONFIG_URL;
+        options.lpszAutoConfigUrl = ie_proxy.lpszAutoConfigUrl;
+    }
+    options.fAutoLogonIfChallenged = TRUE;
+
+    InternetHandle session(WinHttpOpen(L"TrafficMonitorIpPlugin/1.0",
+                                       WINHTTP_ACCESS_TYPE_NO_PROXY,
+                                       WINHTTP_NO_PROXY_NAME,
+                                       WINHTTP_NO_PROXY_BYPASS,
+                                       0));
+    if (!session) {
+        return false;
+    }
+
+    WINHTTP_PROXY_INFO detected{};
+    const bool found = !!WinHttpGetProxyForUrl(session.get(), url, &options, &detected);
+    if (!found || detected.dwAccessType != WINHTTP_ACCESS_TYPE_NAMED_PROXY ||
+        detected.lpszProxy == nullptr || *detected.lpszProxy == L'\0') {
+        if (detected.lpszProxy != nullptr) GlobalFree(detected.lpszProxy);
+        if (detected.lpszProxyBypass != nullptr) GlobalFree(detected.lpszProxyBypass);
+        return false;
+    }
+
+    proxy_info.dwAccessType = detected.dwAccessType;
+    proxy_info.lpszProxy = DuplicateWideString(detected.lpszProxy);
+    proxy_info.lpszProxyBypass = DuplicateWideString(detected.lpszProxyBypass);
+    GlobalFree(detected.lpszProxy);
+    if (detected.lpszProxyBypass != nullptr) GlobalFree(detected.lpszProxyBypass);
+    return proxy_info.lpszProxy != nullptr;
+}
+
+bool ApplyCurrentUserProxyForRequest(HINTERNET request, LPCWSTR url) {
+    IeProxyConfigOwner ie_proxy;
+    if (!WinHttpGetIEProxyConfigForCurrentUser(&ie_proxy.value)) {
+        return false;
+    }
+    ProxyInfoOwner proxy_info;
+    if (!BuildProxyInfoFromIeConfigForUrl(ie_proxy.value, url, proxy_info.value)) {
+        return false;
+    }
+    return !!WinHttpSetOption(request,
+                              WINHTTP_OPTION_PROXY,
+                              &proxy_info.value,
+                              sizeof(proxy_info.value));
+}
+
+std::string NarrowHeaders(const std::vector<wchar_t>& headers) {
+    if (headers.empty()) {
+        return {};
+    }
+    const int source_length = static_cast<int>(headers.size() - 1);
+    const int required = WideCharToMultiByte(CP_UTF8, 0, headers.data(), source_length,
+                                             nullptr, 0, nullptr, nullptr);
+    if (required <= 0) {
+        return {};
+    }
+    std::string result(static_cast<std::size_t>(required), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, headers.data(), source_length,
+                        &result[0], required, nullptr, nullptr);
+    return result;
+}
+
+HttpResponse Get(const wchar_t* host, const wchar_t* path) {
+    HttpResponse response;
+    InternetHandle session(WinHttpOpen(L"TrafficMonitorIpPlugin/1.0",
+                                       WINHTTP_ACCESS_TYPE_NO_PROXY,
+                                       WINHTTP_NO_PROXY_NAME,
+                                       WINHTTP_NO_PROXY_BYPASS,
+                                       0));
+    if (!session || !WinHttpSetTimeouts(session.get(), 3000, 3000, 3000, 5000)) {
+        return response;
+    }
+    InternetHandle connection(WinHttpConnect(session.get(), host,
+                                              INTERNET_DEFAULT_HTTPS_PORT, 0));
+    if (!connection) {
+        return response;
+    }
+    InternetHandle request(WinHttpOpenRequest(connection.get(), L"GET", path, nullptr,
+                                              WINHTTP_NO_REFERER,
+                                              WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                              WINHTTP_FLAG_SECURE));
+    if (!request) {
+        return response;
+    }
+
+    std::wstring url = L"https://";
+    url += host;
+    url += path;
+    ApplyCurrentUserProxyForRequest(request.get(), url.c_str());
+    const wchar_t accept_language[] = L"Accept-Language: en-US\r\n";
+    if (!WinHttpAddRequestHeaders(request.get(), accept_language, DWORD(-1L),
+                                  WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE) ||
+        !WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request.get(), nullptr)) {
+        return response;
+    }
+
+    DWORD status_size = sizeof(response.status);
+    if (!WinHttpQueryHeaders(request.get(),
+                             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                             WINHTTP_HEADER_NAME_BY_INDEX,
+                             &response.status, &status_size, WINHTTP_NO_HEADER_INDEX)) {
+        return response;
+    }
+
+    DWORD headers_size = 0;
+    WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_RAW_HEADERS_CRLF,
+                        WINHTTP_HEADER_NAME_BY_INDEX, nullptr,
+                        &headers_size, WINHTTP_NO_HEADER_INDEX);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || headers_size < sizeof(wchar_t)) {
+        return response;
+    }
+    std::vector<wchar_t> raw_headers(headers_size / sizeof(wchar_t));
+    if (!WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_RAW_HEADERS_CRLF,
+                             WINHTTP_HEADER_NAME_BY_INDEX, raw_headers.data(),
+                             &headers_size, WINHTTP_NO_HEADER_INDEX)) {
+        return response;
+    }
+    response.headers = NarrowHeaders(raw_headers);
+
+    for (;;) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(request.get(), &available)) {
+            return HttpResponse{};
+        }
+        if (available == 0) {
+            break;
+        }
+        if (available > kMaximumResponseBytes - response.body.size()) {
+            return HttpResponse{};
+        }
+        const std::size_t old_size = response.body.size();
+        response.body.resize(old_size + available);
+        DWORD read = 0;
+        if (!WinHttpReadData(request.get(), &response.body[old_size], available, &read)) {
+            return HttpResponse{};
+        }
+        if (read == 0) {
+            return HttpResponse{};
+        }
+        response.body.resize(old_size + read);
+    }
+    response.ok = response.status >= 200 && response.status <= 399;
+    return response;
+}
+
+SiteResult MakeResult(Site site, const std::wstring& value) {
+    const std::wstring code = NormalizeCountryCode(value);
+    return code.empty()
+        ? SiteResult{site, ResultState::Unknown, L""}
+        : SiteResult{site, ResultState::Success, code};
+}
+
+SiteResult ProbeGoogle() {
+    const HttpResponse mapping = Get(L"redirector.gvt1.com", L"/report_mapping?di=no");
+    if (!mapping.ok) return MakeResult(Site::Google, L"");
+    const std::wstring ip = ParseGoogleMappingIp(mapping.body);
+    if (ip.empty()) return MakeResult(Site::Google, L"");
+    const std::wstring path = L"/" + ip + L"/json";
+    const HttpResponse info = Get(L"ipinfo.io", path.c_str());
+    return MakeResult(Site::Google, info.ok ? ParseIpInfoCountry(info.body) : L"");
+}
+
+SiteResult ProbeYouTube() {
+    const HttpResponse response = Get(L"www.youtube.com", L"/premium");
+    return MakeResult(Site::YouTube,
+                      response.ok ? ParseYouTubeCountry(response.body) : L"");
+}
+
+SiteResult ProbeTrace(Site site, const wchar_t* host) {
+    const HttpResponse response = Get(host, L"/cdn-cgi/trace");
+    return MakeResult(site, response.ok ? ParseTraceCountry(response.body) : L"");
+}
+
+SiteResult ProbeGitHub() {
+    const HttpResponse response = Get(L"github.com", L"/");
+    return MakeResult(Site::GitHub,
+                      response.ok ? ParseGitHubCountry(response.headers) : L"");
+}
+
+SiteResult ProbeNetflix() {
+    const HttpResponse response = Get(L"www.netflix.com", L"/title/81280792");
+    return MakeResult(Site::Netflix,
+                      response.ok ? ParseNetflixCountry(response.body) : L"");
+}
+
+Snapshot RunBatch() {
+    Snapshot result = MakeInitialSnapshot();
+    using Probe = SiteResult (*)();
+    const Probe probes[] = {
+        ProbeGoogle,
+        ProbeYouTube,
+        [] { return ProbeTrace(Site::OpenAI, L"chatgpt.com"); },
+        [] { return ProbeTrace(Site::Claude, L"claude.ai"); },
+        ProbeGitHub,
+        ProbeNetflix
+    };
+    for (std::size_t i = 0; i < result.sites.size(); ++i) {
+        try {
+            result.sites[i] = probes[i]();
+        } catch (...) {
+            result.sites[i] = MakeResult(static_cast<Site>(i), L"");
+        }
+    }
+    result.has_completed = true;
+    result.refresh_in_flight = true;
+    return result;
+}
+
+struct RefreshState {
+    std::mutex mutex;
+    Snapshot snapshot = MakeInitialSnapshot();
+    std::chrono::steady_clock::time_point last_refresh{};
+    bool forced_pending = false;
+};
+
+RefreshState& SharedState() {
+    static RefreshState* state = new RefreshState;
+    return *state;
+}
+
+void RefreshWorker() {
+    RefreshState& state = SharedState();
+    for (;;) {
+        Snapshot completed = RunBatch();
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.snapshot.sites = std::move(completed.sites);
+        state.snapshot.has_completed = true;
+        state.last_refresh = now;
+        if (state.forced_pending) {
+            state.forced_pending = false;
+            state.snapshot.refresh_in_flight = true;
+            continue;
+        }
+        state.snapshot.refresh_in_flight = false;
+        return;
+    }
+}
 
 std::wstring AsciiToWide(const std::string& value) {
     return std::wstring(value.begin(), value.end());
@@ -528,6 +862,60 @@ std::wstring FormatTooltip(const Snapshot& snapshot) {
         tooltip += L"❔ Unknown";
     }
     return tooltip;
+}
+
+RefreshDecision EvaluateRefresh(bool has_completed,
+                                bool refresh_in_flight,
+                                std::chrono::steady_clock::duration age,
+                                bool force_refresh) {
+    if (refresh_in_flight) {
+        return force_refresh ? RefreshDecision::QueueForced : RefreshDecision::Skip;
+    }
+    if (force_refresh || !has_completed) {
+        return RefreshDecision::Start;
+    }
+    if (age < std::chrono::steady_clock::duration::zero()) {
+        return RefreshDecision::Skip;
+    }
+    return age >= kRefreshInterval ? RefreshDecision::Start : RefreshDecision::Skip;
+}
+
+Snapshot GetSnapshot() {
+    RefreshState& state = SharedState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.snapshot;
+}
+
+void RequestRefreshAsync(bool force_refresh) {
+    RefreshState& state = SharedState();
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        const auto now = std::chrono::steady_clock::now();
+        const auto age = state.snapshot.has_completed
+            ? now - state.last_refresh
+            : std::chrono::steady_clock::duration::zero();
+        const RefreshDecision decision = EvaluateRefresh(
+            state.snapshot.has_completed,
+            state.snapshot.refresh_in_flight,
+            age,
+            force_refresh);
+        if (decision == RefreshDecision::Skip) {
+            return;
+        }
+        if (decision == RefreshDecision::QueueForced) {
+            state.forced_pending = true;
+            return;
+        }
+        state.snapshot.refresh_in_flight = true;
+    }
+
+    try {
+        std::thread(RefreshWorker).detach();
+    } catch (...) {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.snapshot.refresh_in_flight = false;
+        state.forced_pending = false;
+    }
 }
 
 } // namespace exit_detection
