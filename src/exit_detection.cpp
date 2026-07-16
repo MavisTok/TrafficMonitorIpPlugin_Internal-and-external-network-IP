@@ -317,7 +317,8 @@ struct RefreshState {
     std::mutex mutex;
     Snapshot snapshot = MakeInitialSnapshot();
     std::chrono::steady_clock::time_point last_refresh{};
-    bool forced_pending = false;
+    RefreshQueueState queue;
+    std::thread worker;
 };
 
 RefreshState& SharedState() {
@@ -328,14 +329,22 @@ RefreshState& SharedState() {
 void RefreshWorker() {
     RefreshState& state = SharedState();
     for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            if (state.queue.shutdown_requested) {
+                state.snapshot.refresh_in_flight = false;
+                state.queue.refresh_in_flight = false;
+                return;
+            }
+        }
+
         Snapshot completed = RunBatch();
         const auto now = std::chrono::steady_clock::now();
         std::lock_guard<std::mutex> lock(state.mutex);
         state.snapshot.sites = std::move(completed.sites);
         state.snapshot.has_completed = true;
         state.last_refresh = now;
-        if (state.forced_pending) {
-            state.forced_pending = false;
+        if (CompleteRefreshIteration(state.queue) == RefreshCompletionDecision::RunAgain) {
             state.snapshot.refresh_in_flight = true;
             continue;
         }
@@ -880,6 +889,39 @@ RefreshDecision EvaluateRefresh(bool has_completed,
     return age >= kRefreshInterval ? RefreshDecision::Start : RefreshDecision::Skip;
 }
 
+void StartRefreshQueue(RefreshQueueState& state) {
+    state = RefreshQueueState{};
+    state.refresh_in_flight = true;
+}
+
+bool QueueForcedRefresh(RefreshQueueState& state) {
+    if (!state.refresh_in_flight || state.shutdown_requested ||
+        state.forced_rerun_consumed) {
+        return false;
+    }
+    state.forced_pending = true;
+    return true;
+}
+
+RefreshCompletionDecision CompleteRefreshIteration(RefreshQueueState& state) {
+    if (state.shutdown_requested) {
+        state.refresh_in_flight = false;
+        state.forced_pending = false;
+        state.forced_rerun_consumed = false;
+        return RefreshCompletionDecision::Stop;
+    }
+    if (state.forced_pending && !state.forced_rerun_consumed) {
+        state.forced_pending = false;
+        state.forced_rerun_consumed = true;
+        state.refresh_in_flight = true;
+        return RefreshCompletionDecision::RunAgain;
+    }
+    state.refresh_in_flight = false;
+    state.forced_pending = false;
+    state.forced_rerun_consumed = false;
+    return RefreshCompletionDecision::Stop;
+}
+
 Snapshot GetSnapshot() {
     RefreshState& state = SharedState();
     std::lock_guard<std::mutex> lock(state.mutex);
@@ -888,6 +930,7 @@ Snapshot GetSnapshot() {
 
 void RequestRefreshAsync(bool force_refresh) {
     RefreshState& state = SharedState();
+    std::thread previous_worker;
     {
         std::lock_guard<std::mutex> lock(state.mutex);
         const auto now = std::chrono::steady_clock::now();
@@ -903,19 +946,48 @@ void RequestRefreshAsync(bool force_refresh) {
             return;
         }
         if (decision == RefreshDecision::QueueForced) {
-            state.forced_pending = true;
+            QueueForcedRefresh(state.queue);
             return;
         }
+        if (state.worker.joinable()) {
+            previous_worker = std::move(state.worker);
+        }
+        StartRefreshQueue(state.queue);
         state.snapshot.refresh_in_flight = true;
+    }
+    if (previous_worker.joinable()) {
+        previous_worker.join();
     }
 
     try {
-        std::thread(RefreshWorker).detach();
+        std::thread worker(RefreshWorker);
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.worker = std::move(worker);
     } catch (...) {
         std::lock_guard<std::mutex> lock(state.mutex);
         state.snapshot.refresh_in_flight = false;
-        state.forced_pending = false;
+        state.queue = RefreshQueueState{};
     }
+}
+
+void ShutdownRefreshWorker() {
+    RefreshState& state = SharedState();
+    std::thread worker;
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.queue.shutdown_requested = true;
+        state.queue.forced_pending = false;
+        state.snapshot.refresh_in_flight = false;
+        if (!state.worker.joinable()) {
+            state.queue.refresh_in_flight = false;
+            return;
+        }
+        worker = std::move(state.worker);
+    }
+    worker.join();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.queue = RefreshQueueState{};
+    state.snapshot.refresh_in_flight = false;
 }
 
 } // namespace exit_detection

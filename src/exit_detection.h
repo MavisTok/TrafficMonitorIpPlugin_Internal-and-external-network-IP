@@ -23,6 +23,14 @@ struct Snapshot {
 };
 
 enum class RefreshDecision { Skip, Start, QueueForced };
+enum class RefreshCompletionDecision { Stop, RunAgain };
+
+struct RefreshQueueState {
+    bool refresh_in_flight = false;
+    bool forced_pending = false;
+    bool forced_rerun_consumed = false;
+    bool shutdown_requested = false;
+};
 
 std::wstring NormalizeCountryCode(const std::wstring& value);
 std::wstring ParseGoogleMappingIp(const std::string& body);
@@ -41,8 +49,12 @@ RefreshDecision EvaluateRefresh(bool has_completed,
                                 bool refresh_in_flight,
                                 std::chrono::steady_clock::duration age,
                                 bool force_refresh);
+void StartRefreshQueue(RefreshQueueState& state);
+bool QueueForcedRefresh(RefreshQueueState& state);
+RefreshCompletionDecision CompleteRefreshIteration(RefreshQueueState& state);
 
 Snapshot GetSnapshot();
 void RequestRefreshAsync(bool force_refresh);
+void ShutdownRefreshWorker();
 
 } // namespace exit_detection

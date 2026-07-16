@@ -33,6 +33,17 @@ int main() {
     CHECK(EvaluateRefresh(true, false, minutes(10), false) == RefreshDecision::Start);
     CHECK(EvaluateRefresh(true, false, -minutes(1), false) == RefreshDecision::Skip);
 
+    RefreshQueueState queue_state{};
+    StartRefreshQueue(queue_state);
+    CHECK(queue_state.refresh_in_flight);
+    CHECK(QueueForcedRefresh(queue_state));
+    CHECK(QueueForcedRefresh(queue_state));
+    CHECK(CompleteRefreshIteration(queue_state) == RefreshCompletionDecision::RunAgain);
+    CHECK(queue_state.refresh_in_flight);
+    CHECK(!QueueForcedRefresh(queue_state));
+    CHECK(CompleteRefreshIteration(queue_state) == RefreshCompletionDecision::Stop);
+    CHECK(!queue_state.refresh_in_flight);
+
     CHECK(NormalizeCountryCode(L"jp") == L"JP");
     CHECK(NormalizeCountryCode(L"USA").empty());
     CHECK(NormalizeCountryCode(L"1P").empty());
@@ -47,11 +58,11 @@ int main() {
     CHECK(ParseYouTubeCountry(R"({"premium":true})").empty());
     CHECK(ParseYouTubeCountry(R"({"countryCode":"jp","nested":{"countryCode":"us"}})").empty());
     CHECK(ParseYouTubeCountry(R"({"countryCode":"jp","nested":{"countryCode":"JP"}})") == L"JP");
-    CHECK(ParseYouTubeCountry(R"({"note":"escaped \"countryCode\":\"us\"","countryCode":"jp"})") == L"JP");
+    CHECK(ParseYouTubeCountry("{\"note\":\"escaped \\\"countryCode\\\":\\\"us\\\"\",\"countryCode\":\"jp\"}") == L"JP");
     CHECK(ParseYouTubeCountry(R"({"countryCode":"jp})").empty());
     CHECK(ParseYouTubeCountry(R"(["countryCode":"jp"])").empty());
     CHECK(ParseYouTubeCountry(R"(<html>[ broken { <script>{"countryCode":"jp"}</script></html>)") == L"JP");
-    CHECK(ParseYouTubeCountry(R"({"countryCode":"j\p"})").empty());
+    CHECK(ParseYouTubeCountry("{\"countryCode\":\"j\\p\"}").empty());
     CHECK(ParseYouTubeCountry(R"({"note":"countryCode":"jp"})").empty());
     CHECK(ParseYouTubeCountry(R"({"countryCode":"US"garbage})").empty());
     CHECK(ParseYouTubeCountry(R"({"countryCode":"US"])").empty());
@@ -81,7 +92,7 @@ int main() {
     CHECK(ParseIpInfoCountry(R"({"country":"us","nested":{"country":"ca"}})").empty());
     CHECK(ParseIpInfoCountry("").empty());
     CHECK(ParseIpInfoCountry(R"(<html>} broken ] <script>{"country":"us"}</script></html>)") == L"US");
-    CHECK(ParseIpInfoCountry(R"({"country":"u\s"})").empty());
+    CHECK(ParseIpInfoCountry("{\"country\":\"u\\s\"}").empty());
     CHECK(ParseIpInfoCountry(R"({"note":"country":"us"})").empty());
     CHECK(ParseIpInfoCountry(R"({"country":"JP":false})").empty());
     CHECK(ParseIpInfoCountry(R"({"country":"JP"])").empty());

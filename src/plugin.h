@@ -145,6 +145,7 @@ public:
      * @details 初始化插件实例并加载配置
      */
     TMIpPlugin();
+    ~TMIpPlugin();
 
     // === ITMPlugin核心接口实现 ===
     IPluginItem* GetItem(int index) override;                                    ///< 获取显示项目

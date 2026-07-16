@@ -16,6 +16,7 @@
 #include <Shlwapi.h>        // Shell轻量级实用程序API（用于路径操作）
 #include "options_dialog.h"  // 选项对话框
 #include "claude_risk.h"
+#include "exit_detection.h"
 #include "proxy_watch.h"     // 代理软件窗口打开/关闭监控
 
 #pragma comment(lib, "Shlwapi.lib")  // 链接Shell轻量级实用程序库
@@ -51,6 +52,10 @@ static std::wstring FormatProviderName(const std::wstring& as_name) {
  */
 TMIpPlugin::TMIpPlugin() {
     LoadOptions();  // 从配置文件加载用户设置
+}
+
+TMIpPlugin::~TMIpPlugin() {
+    exit_detection::ShutdownRefreshWorker();
 }
 
 /**
