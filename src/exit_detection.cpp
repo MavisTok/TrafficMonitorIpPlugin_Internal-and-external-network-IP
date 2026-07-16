@@ -5,6 +5,7 @@
 #include <winhttp.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <memory>
 #include <mutex>
@@ -666,6 +667,124 @@ const wchar_t* NetworkCode(Site site) {
     }
 }
 
+class ScreenDc {
+public:
+    ScreenDc() : dc_(GetDC(nullptr)) {}
+    ~ScreenDc() {
+        if (dc_ != nullptr) {
+            ReleaseDC(nullptr, dc_);
+        }
+    }
+    HDC get() const { return dc_; }
+
+private:
+    HDC dc_{};
+};
+
+class TooltipFont {
+public:
+    explicit TooltipFont(HDC dc) : dc_(dc) {
+        if (dc_ == nullptr) {
+            return;
+        }
+
+        NONCLIENTMETRICSW metrics{};
+        metrics.cbSize = sizeof(metrics);
+        if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, metrics.cbSize, &metrics, 0)) {
+            font_ = CreateFontIndirectW(&metrics.lfStatusFont);
+        }
+        if (font_ == nullptr) {
+            font_ = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        }
+        if (font_ != nullptr) {
+            old_font_ = static_cast<HFONT>(SelectObject(dc_, font_));
+        }
+    }
+
+    ~TooltipFont() {
+        if (dc_ != nullptr && old_font_ != nullptr) {
+            SelectObject(dc_, old_font_);
+        }
+        if (font_ != nullptr && font_ != GetStockObject(DEFAULT_GUI_FONT)) {
+            DeleteObject(font_);
+        }
+    }
+
+    TooltipFont(const TooltipFont&) = delete;
+    TooltipFont& operator=(const TooltipFont&) = delete;
+
+private:
+    HDC dc_{};
+    HFONT font_{};
+    HFONT old_font_{};
+};
+
+int TextWidth(HDC dc, const std::wstring& text) {
+    if (dc == nullptr || text.empty()) {
+        return 0;
+    }
+    SIZE size{};
+    if (!GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size)) {
+        return static_cast<int>(text.size()) * 8;
+    }
+    return size.cx;
+}
+
+std::wstring SpacesToReach(HDC dc, const std::wstring& prefix, int target_width) {
+    constexpr std::array<wchar_t, 4> kBlankChars = {L' ', L'\u2007', L'\u2009', L'\u200A'};
+
+    std::wstring spaces;
+    int width = TextWidth(dc, prefix);
+    while (width < target_width && spaces.size() < 64) {
+        wchar_t best_char = L' ';
+        int best_width = 0;
+        int best_delta = target_width;
+        bool found_under_target = false;
+
+        for (const wchar_t blank : kBlankChars) {
+            std::wstring candidate = prefix + spaces;
+            candidate.push_back(blank);
+            const int candidate_width = TextWidth(dc, candidate);
+            if (candidate_width <= width) {
+                continue;
+            }
+
+            const int delta = target_width - candidate_width;
+            if (delta >= 0) {
+                if (!found_under_target || delta < best_delta) {
+                    best_char = blank;
+                    best_width = candidate_width;
+                    best_delta = delta;
+                    found_under_target = true;
+                }
+            } else if (!found_under_target && -delta < best_delta) {
+                best_char = blank;
+                best_width = candidate_width;
+                best_delta = -delta;
+            }
+        }
+
+        if (best_width <= width) {
+            break;
+        }
+        spaces.push_back(best_char);
+        width = best_width;
+    }
+    return spaces;
+}
+
+std::wstring FormatExitRow(HDC dc, Site site, const std::wstring& result) {
+    constexpr int kArrowColumn = 66;
+    constexpr int kResultColumn = 102;
+
+    std::wstring line = SiteName(site);
+    line += SpacesToReach(dc, line, kArrowColumn);
+    line += L"->";
+    line += SpacesToReach(dc, line, kResultColumn);
+    line += result;
+    return line;
+}
+
 std::wstring ParseLocaleCountry(const std::string& body, const std::string& marker) {
     std::size_t pos = body.find(marker);
     while (pos != std::string::npos) {
@@ -888,64 +1007,31 @@ Snapshot MakeInitialSnapshot() {
 }
 
 std::wstring FormatTooltip(const Snapshot& snapshot) {
-    {
-        std::wstring tooltip = L"---- Exit Check ----";
-        for (std::size_t i = 0; i < static_cast<std::size_t>(Site::Count); ++i) {
-            const Site site = static_cast<Site>(i);
-            const std::wstring name = SiteName(site);
-            tooltip += L'\n';
-            tooltip += name;
-            tooltip += L"\t->\t";
-
-            const SiteResult* result = FindSite(snapshot, site);
-            if (!snapshot.has_completed ||
-                (result != nullptr && result->state == ResultState::Pending)) {
-                tooltip += L"-- WAIT";
-                continue;
-            }
-
-            if (result != nullptr && result->state == ResultState::Success) {
-                const std::wstring code = NormalizeCountryCode(result->country_code);
-                if (!code.empty()) {
-                    tooltip += code;
-                    tooltip += L' ';
-                    tooltip += NetworkCode(site);
-                    continue;
-                }
-            }
-            tooltip += L"-- ----";
-        }
-        return tooltip;
-    }
-
-    std::wstring tooltip = L"──────── 出口检测 ────────";
+    ScreenDc screen_dc;
+    TooltipFont tooltip_font(screen_dc.get());
+    std::wstring tooltip = L"---- Exit Check ----";
     for (std::size_t i = 0; i < static_cast<std::size_t>(Site::Count); ++i) {
         const Site site = static_cast<Site>(i);
-        const std::wstring name = SiteName(site);
-        tooltip += L'\n';
-        tooltip += name;
-        if (name.size() < 7) {
-            tooltip.append(7 - name.size(), L' ');
-        }
-        tooltip += L"  → ";
 
+        std::wstring value;
         const SiteResult* result = FindSite(snapshot, site);
         if (!snapshot.has_completed ||
             (result != nullptr && result->state == ResultState::Pending)) {
-            tooltip += L"⏳ Detecting...";
-            continue;
-        }
-
-        if (result != nullptr && result->state == ResultState::Success) {
-            const std::wstring flag = CountryFlag(result->country_code);
-            if (!flag.empty()) {
-                tooltip += flag;
-                tooltip += L' ';
-                tooltip += CountryName(result->country_code);
-                continue;
+            value = L"-- WAIT";
+        } else if (result != nullptr && result->state == ResultState::Success) {
+            const std::wstring code = NormalizeCountryCode(result->country_code);
+            if (!code.empty()) {
+                value = code;
+                value += L' ';
+                value += NetworkCode(site);
             }
         }
-        tooltip += L"❔ Unknown";
+        if (value.empty()) {
+            value = L"-- ----";
+        }
+
+        tooltip += L'\n';
+        tooltip += FormatExitRow(screen_dc.get(), site, value);
     }
     return tooltip;
 }
