@@ -79,6 +79,65 @@ int main() {
     CHECK(ParseGitHubCountry("x-github-country").empty());
     CHECK(ParseGitHubCountry("").empty());
 
+    CHECK(CountryFlag(L"HK") == L"🇭🇰");
+    CHECK(CountryFlag(L"JP") == L"🇯🇵");
+    CHECK(CountryFlag(L"US") == L"🇺🇸");
+    CHECK(CountryFlag(L"SG") == L"🇸🇬");
+    CHECK(CountryFlag(L"zz").empty());
+    CHECK(CountryFlag(L"1P").empty());
+
+    CHECK(CountryName(L"HK") == L"Hong Kong");
+    CHECK(CountryName(L"JP") == L"Japan");
+    CHECK(CountryName(L"US") == L"United States");
+    CHECK(CountryName(L"SG") == L"Singapore");
+    CHECK(CountryName(L"ZZ") == L"ZZ");
+    CHECK(CountryName(L"1P").empty());
+
+    const Snapshot initial = MakeInitialSnapshot();
+    CHECK(!initial.has_completed);
+    CHECK(!initial.refresh_in_flight);
+    for (std::size_t i = 0; i < initial.sites.size(); ++i) {
+        CHECK(initial.sites[i].site == static_cast<Site>(i));
+        CHECK(initial.sites[i].state == ResultState::Pending);
+        CHECK(initial.sites[i].country_code.empty());
+    }
+
+    const std::wstring pending_tooltip = FormatTooltip(initial);
+    CHECK(pending_tooltip.find(L"──────── 出口检测 ────────") != std::wstring::npos);
+    CHECK(pending_tooltip.find(L"Google   → ⏳ Detecting...") != std::wstring::npos);
+    CHECK(pending_tooltip.find(L"YouTube  → ⏳ Detecting...") != std::wstring::npos);
+
+    Snapshot ready = MakeInitialSnapshot();
+    ready.has_completed = true;
+    ready.sites[0] = {Site::Google, ResultState::Success, L"HK"};
+    ready.sites[1] = {Site::YouTube, ResultState::Success, L"JP"};
+    ready.sites[2] = {Site::OpenAI, ResultState::Success, L"US"};
+    ready.sites[3] = {Site::Claude, ResultState::Success, L"SG"};
+    ready.sites[4] = {Site::GitHub, ResultState::Unknown, L""};
+    ready.sites[5] = {Site::Netflix, ResultState::Success, L"JP"};
+    CHECK(FormatTooltip(ready) ==
+          L"──────── 出口检测 ────────\n"
+          L"Google   → 🇭🇰 Hong Kong\n"
+          L"YouTube  → 🇯🇵 Japan\n"
+          L"OpenAI   → 🇺🇸 United States\n"
+          L"Claude   → 🇸🇬 Singapore\n"
+          L"GitHub   → ❔ Unknown\n"
+          L"Netflix  → 🇯🇵 Japan");
+
+    Snapshot first_batch = ready;
+    first_batch.has_completed = false;
+    CHECK(FormatTooltip(first_batch) ==
+          L"──────── 出口检测 ────────\n"
+          L"Google   → ⏳ Detecting...\n"
+          L"YouTube  → ⏳ Detecting...\n"
+          L"OpenAI   → ⏳ Detecting...\n"
+          L"Claude   → ⏳ Detecting...\n"
+          L"GitHub   → ⏳ Detecting...\n"
+          L"Netflix  → ⏳ Detecting...");
+
+    ready.sites[0] = {Site::Google, ResultState::Success, L"1P"};
+    CHECK(FormatTooltip(ready).find(L"Google   → ❔ Unknown") != std::wstring::npos);
+
     if (g_failures > 0) {
         std::cerr << g_failures << " test(s) failed\n";
         return 1;
