@@ -25,6 +25,44 @@ bool HasKeyPrefix(const std::string& text, std::size_t key_pos) {
     return pos > 0 && (text[pos - 1] == '{' || text[pos - 1] == ',');
 }
 
+bool HasValueTerminator(const std::string& text, std::size_t value_end) {
+    SkipWhitespace(text, value_end);
+    return value_end < text.size() &&
+           (text[value_end] == ',' || text[value_end] == '}' || text[value_end] == ']');
+}
+
+bool IsInsideScriptLiteral(const std::string& text, std::size_t position) {
+    const std::size_t script_start = text.rfind("<script", position);
+    const std::size_t script_end = text.rfind("</script", position);
+    if (script_start == std::string::npos ||
+        (script_end != std::string::npos && script_end > script_start)) {
+        return false;
+    }
+    const std::size_t content_start = text.find('>', script_start);
+    if (content_start == std::string::npos || content_start >= position) {
+        return false;
+    }
+
+    char quote = 0;
+    std::size_t pos = content_start + 1;
+    while (pos < position) {
+        const char ch = text[pos];
+        if (quote != 0) {
+            if (ch == '\\' && pos + 1 < position) {
+                pos += 2;
+                continue;
+            }
+            if (ch == quote) {
+                quote = 0;
+            }
+        } else if (ch == '\'' || ch == '`') {
+            quote = ch;
+        }
+        ++pos;
+    }
+    return quote != 0;
+}
+
 bool ParseCountryValue(const std::string& text,
                        std::size_t key_end,
                        std::wstring& country) {
@@ -35,7 +73,8 @@ bool ParseCountryValue(const std::string& text,
     }
     ++pos;
     SkipWhitespace(text, pos);
-    if (pos + 3 >= text.size() || text[pos] != '"' || text[pos + 3] != '"') {
+    if (pos + 3 >= text.size() || text[pos] != '"' || text[pos + 3] != '"' ||
+        !HasValueTerminator(text, pos + 4)) {
         return false;
     }
     const unsigned char first = static_cast<unsigned char>(text[pos + 1]);
@@ -55,6 +94,7 @@ std::wstring ParseJsonCountry(const std::string& body, const std::string& field)
     while (key_pos != std::string::npos) {
         std::wstring candidate;
         if (HasKeyPrefix(body, key_pos) &&
+            !(field == "countryCode" && IsInsideScriptLiteral(body, key_pos)) &&
             ParseCountryValue(body, key_pos + key.size(), candidate)) {
             if (!country.empty() && country != candidate) {
                 return {};
@@ -85,7 +125,7 @@ bool HasStringValue(const std::string& text, std::size_t key_end) {
             }
             pos += 2;
         } else if (text[pos] == '"') {
-            return true;
+            return HasValueTerminator(text, pos + 1);
         } else {
             ++pos;
         }
