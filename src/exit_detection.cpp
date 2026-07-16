@@ -28,12 +28,37 @@ bool HasKeyPrefix(const std::string& text, std::size_t key_pos) {
 bool HasValueTerminator(const std::string& text, std::size_t value_end) {
     SkipWhitespace(text, value_end);
     return value_end < text.size() &&
-           (text[value_end] == ',' || text[value_end] == '}' || text[value_end] == ']');
+           (text[value_end] == ',' || text[value_end] == '}');
+}
+
+char AsciiLower(char ch) {
+    return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch - 'A' + 'a') : ch;
+}
+
+std::size_t RFindAsciiNoCase(const std::string& text,
+                             const std::string& needle,
+                             std::size_t before) {
+    std::size_t found = std::string::npos;
+    for (std::size_t pos = 0;
+         pos <= before && pos + needle.size() <= text.size();
+         ++pos) {
+        bool matches = true;
+        for (std::size_t i = 0; i < needle.size(); ++i) {
+            if (AsciiLower(text[pos + i]) != AsciiLower(needle[i])) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            found = pos;
+        }
+    }
+    return found;
 }
 
 bool IsInsideScriptLiteral(const std::string& text, std::size_t position) {
-    const std::size_t script_start = text.rfind("<script", position);
-    const std::size_t script_end = text.rfind("</script", position);
+    const std::size_t script_start = RFindAsciiNoCase(text, "<script", position);
+    const std::size_t script_end = RFindAsciiNoCase(text, "</script", position);
     if (script_start == std::string::npos ||
         (script_end != std::string::npos && script_end > script_start)) {
         return false;
