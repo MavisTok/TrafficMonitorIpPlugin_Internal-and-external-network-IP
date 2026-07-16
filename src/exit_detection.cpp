@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <vector>
 
 namespace exit_detection {
 namespace {
@@ -11,38 +12,97 @@ std::wstring AsciiToWide(const std::string& value) {
     return std::wstring(value.begin(), value.end());
 }
 
-std::string ExtractJsonString(const std::string& text, const std::string& field) {
-    const std::string key = "\"" + field + "\"";
-    std::size_t key_pos = text.find(key);
-    while (key_pos != std::string::npos) {
-        std::size_t pos = key_pos + key.size();
-        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
-            ++pos;
-        }
-        if (pos < text.size() && text[pos] == ':') {
-            ++pos;
-            while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
-                ++pos;
-            }
-            if (pos < text.size() && text[pos] == '"') {
-                const std::size_t end = text.find('"', pos + 1);
-                if (end != std::string::npos) {
-                    return text.substr(pos + 1, end - pos - 1);
-                }
-                return {};
-            }
-        }
-        key_pos = text.find(key, key_pos + key.size());
+void SkipWhitespace(const std::string& text, std::size_t& pos) {
+    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+        ++pos;
     }
-    return {};
+}
+
+bool ReadJsonString(const std::string& text, std::size_t& pos, std::string& value) {
+    if (pos >= text.size() || text[pos] != '"') {
+        return false;
+    }
+
+    value.clear();
+    ++pos;
+    while (pos < text.size()) {
+        const char ch = text[pos++];
+        if (ch == '"') {
+            return true;
+        }
+        if (ch == '\\') {
+            if (pos >= text.size()) {
+                return false;
+            }
+            value.push_back(text[pos++]);
+        } else {
+            value.push_back(ch);
+        }
+    }
+    return false;
 }
 
 std::wstring ParseJsonCountry(const std::string& body, const std::string& field) {
-    return NormalizeCountryCode(AsciiToWide(ExtractJsonString(body, field)));
+    std::vector<char> containers;
+    std::wstring country;
+    bool saw_root = false;
+
+    std::size_t pos = 0;
+    while (pos < body.size()) {
+        const char ch = body[pos];
+        if (ch == '{' || ch == '[') {
+            containers.push_back(ch);
+            saw_root = true;
+            ++pos;
+            continue;
+        }
+        if (ch == '}' || ch == ']') {
+            if (containers.empty() ||
+                (ch == '}' && containers.back() != '{') ||
+                (ch == ']' && containers.back() != '[')) {
+                return {};
+            }
+            containers.pop_back();
+            ++pos;
+            continue;
+        }
+        if (ch != '"') {
+            ++pos;
+            continue;
+        }
+
+        std::string key;
+        if (!ReadJsonString(body, pos, key)) {
+            return {};
+        }
+        std::size_t value_pos = pos;
+        SkipWhitespace(body, value_pos);
+        if (containers.empty() || containers.back() != '{' || key != field ||
+            value_pos >= body.size() || body[value_pos] != ':') {
+            continue;
+        }
+        ++value_pos;
+        SkipWhitespace(body, value_pos);
+        std::string value;
+        if (!ReadJsonString(body, value_pos, value)) {
+            continue;
+        }
+
+        const std::wstring normalized = NormalizeCountryCode(AsciiToWide(value));
+        if (normalized.empty()) {
+            continue;
+        }
+        if (!country.empty() && country != normalized) {
+            return {};
+        }
+        country = normalized;
+    }
+
+    return saw_root && containers.empty() ? country : L"";
 }
 
 bool IsIpv4(const std::string& value) {
-    if (value.empty()) {
+    if (value.empty() || value.front() == '.' || value.back() == '.') {
         return false;
     }
 
@@ -136,16 +196,100 @@ std::wstring ParseTraceCountry(const std::string& body) {
 }
 
 std::wstring ParseNetflixCountry(const std::string& body) {
-    const std::size_t country_name = body.find("\"countryName\"");
-    if (country_name == std::string::npos) {
-        return {};
+    struct ObjectFields {
+        std::vector<std::wstring> ids;
+        std::size_t country_names = 0;
+        bool id_after_country_name = false;
+    };
+
+    std::vector<char> containers;
+    std::vector<ObjectFields> objects;
+    std::wstring candidate;
+    bool ambiguous = false;
+    bool saw_root = false;
+
+    std::size_t pos = 0;
+    while (pos < body.size()) {
+        const char ch = body[pos];
+        if (ch == '{') {
+            containers.push_back(ch);
+            objects.emplace_back();
+            saw_root = true;
+            ++pos;
+            continue;
+        }
+        if (ch == '[') {
+            containers.push_back(ch);
+            saw_root = true;
+            ++pos;
+            continue;
+        }
+        if (ch == '}' || ch == ']') {
+            if (containers.empty() ||
+                (ch == '}' && containers.back() != '{') ||
+                (ch == ']' && containers.back() != '[')) {
+                return {};
+            }
+            if (ch == '}') {
+                ObjectFields fields = objects.back();
+                objects.pop_back();
+                if (fields.id_after_country_name) {
+                    ambiguous = true;
+                } else if (!fields.ids.empty() && fields.country_names > 0) {
+                    if (fields.ids.size() != 1 || fields.country_names != 1 ||
+                        !candidate.empty()) {
+                        ambiguous = true;
+                    } else {
+                        candidate = fields.ids.front();
+                    }
+                }
+            }
+            containers.pop_back();
+            ++pos;
+            continue;
+        }
+        if (ch != '"') {
+            ++pos;
+            continue;
+        }
+
+        std::string key;
+        if (!ReadJsonString(body, pos, key)) {
+            return {};
+        }
+        std::size_t value_pos = pos;
+        SkipWhitespace(body, value_pos);
+        if (objects.empty() || containers.empty() || containers.back() != '{' ||
+            value_pos >= body.size() || body[value_pos] != ':') {
+            continue;
+        }
+        ++value_pos;
+        SkipWhitespace(body, value_pos);
+        std::string value;
+        if (!ReadJsonString(body, value_pos, value)) {
+            if (key == "id" || key == "countryName") {
+                return {};
+            }
+            continue;
+        }
+        if (key == "id") {
+            const std::wstring id = NormalizeCountryCode(AsciiToWide(value));
+            if (!id.empty()) {
+                if (objects.back().country_names > 0) {
+                    objects.back().id_after_country_name = true;
+                } else {
+                    objects.back().ids.push_back(id);
+                }
+            }
+        } else if (key == "countryName") {
+            ++objects.back().country_names;
+        }
     }
 
-    const std::size_t id = body.rfind("\"id\"", country_name);
-    if (id == std::string::npos) {
+    if (!saw_root || !containers.empty() || !objects.empty() || ambiguous) {
         return {};
     }
-    return ParseJsonCountry(body.substr(id, country_name - id), "id");
+    return candidate;
 }
 
 std::wstring ParseIpInfoCountry(const std::string& body) {
