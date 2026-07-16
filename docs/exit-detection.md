@@ -8,7 +8,6 @@ Google	->	US GGL
 YouTube	->	JP GGL
 OpenAI	->	US CF
 Claude	->	US CF
-GitHub	->	US GH
 Netflix	->	JP NFLX
 ```
 

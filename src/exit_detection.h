@@ -7,7 +7,7 @@
 
 namespace exit_detection {
 
-enum class Site { Google, YouTube, OpenAI, Claude, GitHub, Netflix, Count };
+enum class Site { Google, YouTube, OpenAI, Claude, Netflix, Count };
 enum class ResultState { Pending, Success, Unknown };
 
 struct SiteResult {
@@ -38,7 +38,6 @@ std::wstring ParseYouTubeCountry(const std::string& body);
 std::wstring ParseTraceCountry(const std::string& body);
 std::wstring ParseNetflixCountry(const std::string& body);
 std::wstring ParseIpInfoCountry(const std::string& body);
-std::wstring ParseGitHubCountry(const std::string& headers);
 
 std::wstring CountryFlag(const std::wstring& country_code);
 std::wstring CountryName(const std::wstring& country_code);

@@ -101,13 +101,6 @@ int main() {
     CHECK(ParseIpInfoCountry(R"({"country":"JP":false})").empty());
     CHECK(ParseIpInfoCountry(R"({"country":"JP"])").empty());
 
-    CHECK(ParseGitHubCountry("server: github.com\r\nx-frame-options: deny\r\n").empty());
-    CHECK(ParseGitHubCountry("x-github-country: ca\r\n") == L"CA");
-    CHECK(ParseGitHubCountry("X-GitHub-Country: jp\r\n") == L"JP");
-    CHECK(ParseGitHubCountry("x-github-country-code: ca\r\n").empty());
-    CHECK(ParseGitHubCountry("x-github-country").empty());
-    CHECK(ParseGitHubCountry("").empty());
-
     CHECK(CountryFlag(L"HK") == L"🇭🇰");
     CHECK(CountryFlag(L"JP") == L"🇯🇵");
     CHECK(CountryFlag(L"US") == L"🇺🇸");
@@ -125,6 +118,7 @@ int main() {
     const Snapshot initial = MakeInitialSnapshot();
     CHECK(!initial.has_completed);
     CHECK(!initial.refresh_in_flight);
+    CHECK(initial.sites.size() == 5);
     for (std::size_t i = 0; i < initial.sites.size(); ++i) {
         CHECK(initial.sites[i].site == static_cast<Site>(i));
         CHECK(initial.sites[i].state == ResultState::Pending);
@@ -136,6 +130,7 @@ int main() {
     CHECK(initial_tooltip.find(L"Google") != std::wstring::npos);
     CHECK(initial_tooltip.find(L"->") != std::wstring::npos);
     CHECK(initial_tooltip.find(L"-- WAIT") != std::wstring::npos);
+    CHECK(initial_tooltip.find(L"GitHub") == std::wstring::npos);
     CHECK(initial_tooltip.find(L'\t') == std::wstring::npos);
 
     Snapshot compact_ready = MakeInitialSnapshot();
@@ -144,8 +139,7 @@ int main() {
     compact_ready.sites[1] = {Site::YouTube, ResultState::Success, L"JP"};
     compact_ready.sites[2] = {Site::OpenAI, ResultState::Success, L"US"};
     compact_ready.sites[3] = {Site::Claude, ResultState::Success, L"SG"};
-    compact_ready.sites[4] = {Site::GitHub, ResultState::Unknown, L""};
-    compact_ready.sites[5] = {Site::Netflix, ResultState::Success, L"JP"};
+    compact_ready.sites[4] = {Site::Netflix, ResultState::Success, L"JP"};
     const std::wstring compact_tooltip = FormatTooltip(compact_ready);
     CHECK(compact_tooltip.find(L"Google") != std::wstring::npos);
     CHECK(compact_tooltip.find(L"HK GGL") != std::wstring::npos);
@@ -158,45 +152,6 @@ int main() {
 
     compact_ready.sites[0] = {Site::Google, ResultState::Success, L"1P"};
     CHECK(FormatTooltip(compact_ready).find(L"-- ----") != std::wstring::npos);
-
-#if 0
-    const std::wstring pending_tooltip = FormatTooltip(initial);
-    CHECK(pending_tooltip.find(L"──────── 出口检测 ────────") != std::wstring::npos);
-    CHECK(pending_tooltip.find(L"Google   → ⏳ Detecting...") != std::wstring::npos);
-    CHECK(pending_tooltip.find(L"YouTube  → ⏳ Detecting...") != std::wstring::npos);
-
-    Snapshot ready = MakeInitialSnapshot();
-    ready.has_completed = true;
-    ready.sites[0] = {Site::Google, ResultState::Success, L"HK"};
-    ready.sites[1] = {Site::YouTube, ResultState::Success, L"JP"};
-    ready.sites[2] = {Site::OpenAI, ResultState::Success, L"US"};
-    ready.sites[3] = {Site::Claude, ResultState::Success, L"SG"};
-    ready.sites[4] = {Site::GitHub, ResultState::Unknown, L""};
-    ready.sites[5] = {Site::Netflix, ResultState::Success, L"JP"};
-    CHECK(FormatTooltip(ready) ==
-          L"──────── 出口检测 ────────\n"
-          L"Google   → 🇭🇰 Hong Kong\n"
-          L"YouTube  → 🇯🇵 Japan\n"
-          L"OpenAI   → 🇺🇸 United States\n"
-          L"Claude   → 🇸🇬 Singapore\n"
-          L"GitHub   → ❔ Unknown\n"
-          L"Netflix  → 🇯🇵 Japan");
-
-    Snapshot first_batch = ready;
-    first_batch.has_completed = false;
-    CHECK(FormatTooltip(first_batch) ==
-          L"──────── 出口检测 ────────\n"
-          L"Google   → ⏳ Detecting...\n"
-          L"YouTube  → ⏳ Detecting...\n"
-          L"OpenAI   → ⏳ Detecting...\n"
-          L"Claude   → ⏳ Detecting...\n"
-          L"GitHub   → ⏳ Detecting...\n"
-          L"Netflix  → ⏳ Detecting...");
-
-    ready.sites[0] = {Site::Google, ResultState::Success, L"1P"};
-    CHECK(FormatTooltip(ready).find(L"Google   → ❔ Unknown") != std::wstring::npos);
-
-#endif
 
     if (g_failures > 0) {
         std::cerr << g_failures << " test(s) failed\n";

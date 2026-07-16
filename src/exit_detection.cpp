@@ -279,12 +279,6 @@ SiteResult ProbeTrace(Site site, const wchar_t* host) {
     return MakeResult(site, response.ok ? ParseTraceCountry(response.body) : L"");
 }
 
-SiteResult ProbeGitHub() {
-    const HttpResponse response = Get(L"github.com", L"/");
-    return MakeResult(Site::GitHub,
-                      response.ok ? ParseGitHubCountry(response.headers) : L"");
-}
-
 SiteResult ProbeNetflix() {
     const HttpResponse response = Get(L"www.netflix.com", L"/title/81280792");
     return MakeResult(Site::Netflix,
@@ -299,7 +293,6 @@ Snapshot RunBatch() {
         ProbeYouTube,
         [] { return ProbeTrace(Site::OpenAI, L"chatgpt.com"); },
         [] { return ProbeTrace(Site::Claude, L"claude.ai"); },
-        ProbeGitHub,
         ProbeNetflix
     };
     for (std::size_t i = 0; i < result.sites.size(); ++i) {
@@ -640,7 +633,6 @@ const wchar_t* SiteName(Site site) {
     case Site::YouTube: return L"YouTube";
     case Site::OpenAI: return L"OpenAI";
     case Site::Claude: return L"Claude";
-    case Site::GitHub: return L"GitHub";
     case Site::Netflix: return L"Netflix";
     default: return L"";
     }
@@ -661,7 +653,6 @@ const wchar_t* NetworkCode(Site site) {
     case Site::YouTube: return L"GGL";
     case Site::OpenAI: return L"CF";
     case Site::Claude: return L"CF";
-    case Site::GitHub: return L"GH";
     case Site::Netflix: return L"NFLX";
     default: return L"";
     }
@@ -932,44 +923,6 @@ std::wstring ParseNetflixCountry(const std::string& body) {
 
 std::wstring ParseIpInfoCountry(const std::string& body) {
     return ParseJsonCountry(body, "country");
-}
-
-std::wstring ParseGitHubCountry(const std::string& headers) {
-    std::size_t start = 0;
-    while (start < headers.size()) {
-        const std::size_t end = headers.find('\n', start);
-        std::string line = headers.substr(start, end == std::string::npos ? headers.size() - start : end - start);
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-
-        const std::size_t colon = line.find(':');
-        if (colon != std::string::npos) {
-            std::string name = line.substr(0, colon);
-            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) {
-                return static_cast<char>(std::tolower(ch));
-            });
-            if (name == "x-github-country") {
-                std::size_t value_start = colon + 1;
-                while (value_start < line.size() &&
-                       (line[value_start] == ' ' || line[value_start] == '\t')) {
-                    ++value_start;
-                }
-                std::size_t value_end = line.size();
-                while (value_end > value_start &&
-                       (line[value_end - 1] == ' ' || line[value_end - 1] == '\t')) {
-                    --value_end;
-                }
-                return NormalizeCountryCode(AsciiToWide(line.substr(value_start, value_end - value_start)));
-            }
-        }
-
-        if (end == std::string::npos) {
-            break;
-        }
-        start = end + 1;
-    }
-    return {};
 }
 
 std::wstring CountryFlag(const std::wstring& country_code) {
