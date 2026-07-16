@@ -38,6 +38,34 @@ static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
     return r;
 }
 
+static bool EnsureDirectoryExists(const std::wstring& dir) {
+    if (dir.empty()) {
+        return false;
+    }
+    if (PathIsDirectoryW(dir.c_str())) {
+        return true;
+    }
+
+    std::wstring normalized = dir;
+    while (normalized.size() > 3 &&
+           (normalized.back() == L'\\' || normalized.back() == L'/')) {
+        normalized.pop_back();
+    }
+
+    const std::size_t slash = normalized.find_last_of(L"\\/");
+    if (slash != std::wstring::npos && slash > 2) {
+        if (!EnsureDirectoryExists(normalized.substr(0, slash))) {
+            return false;
+        }
+    }
+
+    if (CreateDirectoryW(normalized.c_str(), nullptr)) {
+        return true;
+    }
+    return GetLastError() == ERROR_ALREADY_EXISTS &&
+           PathIsDirectoryW(normalized.c_str());
+}
+
 static std::wstring FormatProviderName(const std::wstring& as_name) {
     if (as_name.empty()) return L"";
     iputils::IpWithCountry info;
@@ -356,6 +384,7 @@ void TMIpPlugin::LoadOptions() {
 
 void TMIpPlugin::SaveOptions() {
     if (config_dir_.empty()) return;
+    if (!EnsureDirectoryExists(config_dir_)) return;
     std::wstring ini = JoinPath(config_dir_, L"tm_ip_plugin.ini");
     WritePrivateProfileStringW(L"ip", L"show_internal", options_.show_internal ? L"1" : L"0", ini.c_str());
     WritePrivateProfileStringW(L"ip", L"show_external", options_.show_external ? L"1" : L"0", ini.c_str());

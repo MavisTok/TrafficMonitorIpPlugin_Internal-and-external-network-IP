@@ -85,6 +85,9 @@ Assert-Contains 'SaveOptions writes enable_exit_detection key' `
 Assert-Contains 'SaveOptions writes enable_exit_detection value' `
     $pluginCpp $saveValueNeedle
 
+Assert-Match 'SaveOptions creates the plugin config directory before writing INI' `
+    $pluginCpp 'EnsureDirectoryExists\(config_dir_\)'
+
 Assert-Match 'plugin declares exit detection tooltip helper' `
     (Read-Text 'src/plugin.h') 'void\s+AppendExitDetectionTooltip\(\)'
 
