@@ -92,6 +92,11 @@ int main() {
     CHECK(ParseNetflixCountry(R"(<html><head><meta data-rh="true" property="og:locale" content="en-US"/></head></html>)") == L"US");
     CHECK(ParseNetflixCountry(R"(<html lang="en-JP"><meta property="og:locale" content="en-JP"/>)") == L"JP");
     CHECK(ParseNetflixCountry(R"(<html><meta property="og:locale" content="en-US"/>)") == L"US");
+    // requestCountry.id is authoritative and survives a page full of other data.
+    CHECK(ParseNetflixCountry(R"({"requestCountry":{"supportedLocales":["ja","en"],"id":"JP","countryName":"Japan"}})") == L"JP");
+    // Reliable html-lang / og:locale win over a conflicting deeper heuristic
+    // instead of the whole parse aborting on the conflict.
+    CHECK(ParseNetflixCountry(R"(<html lang="en-JP"><script>{"id":"US","countryName":"United States","id":"CA","countryName":"Canada"}</script></html>)") == L"JP");
 
     CHECK(ParseIpInfoCountry(R"({"ip":"203.0.113.7","country":"us"})") == L"US");
     CHECK(ParseIpInfoCountry(R"({"country":"USA"})").empty());
@@ -130,13 +135,13 @@ int main() {
     const std::wstring initial_tooltip = FormatTooltip(initial);
     CHECK(initial_tooltip.find(L"---- Exit Check ----") != std::wstring::npos);
     CHECK(initial_tooltip.find(L"Google") != std::wstring::npos);
-    CHECK(initial_tooltip.find(L"Google  ->") != std::wstring::npos);
-    CHECK(initial_tooltip.find(L"YouTube ->") != std::wstring::npos);
-    CHECK(initial_tooltip.find(L"Netflix ->") != std::wstring::npos);
+    CHECK(initial_tooltip.find(L"Google\t->") != std::wstring::npos);
+    CHECK(initial_tooltip.find(L"YouTube\t->") != std::wstring::npos);
+    CHECK(initial_tooltip.find(L"Netflix\t->") != std::wstring::npos);
     CHECK(initial_tooltip.find(L"->") != std::wstring::npos);
     CHECK(initial_tooltip.find(L"-- WAIT") != std::wstring::npos);
     CHECK(initial_tooltip.find(L"GitHub") == std::wstring::npos);
-    CHECK(initial_tooltip.find(L'\t') == std::wstring::npos);
+    CHECK(initial_tooltip.find(L'\t') != std::wstring::npos);
 
     Snapshot compact_ready = MakeInitialSnapshot();
     compact_ready.has_completed = true;
@@ -152,7 +157,7 @@ int main() {
     CHECK(compact_tooltip.find(L"US CF") != std::wstring::npos);
     CHECK(compact_tooltip.find(L"SG CF") != std::wstring::npos);
     CHECK(compact_tooltip.find(L"JP NFLX") != std::wstring::npos);
-    CHECK(compact_tooltip.find(L"\t") == std::wstring::npos);
+    CHECK(compact_tooltip.find(L"\t") != std::wstring::npos);
     CHECK(compact_tooltip.find(L"🇭") == std::wstring::npos);
 
     compact_ready.sites[0] = {Site::Google, ResultState::Success, L"1P"};

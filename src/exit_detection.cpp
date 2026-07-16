@@ -233,7 +233,23 @@ HttpResponse Get(const wchar_t* host, const wchar_t* path) {
             break;
         }
         if (available > kMaximumResponseBytes - response.body.size()) {
-            return HttpResponse{};
+            // Response exceeds the cap. Keep the prefix already buffered rather
+            // than discarding the whole body: early-page signals (e.g. Netflix
+            // <html lang> and og:locale live in the first few KB) survive so the
+            // parsers can still succeed on very large pages.
+            const std::size_t remaining = kMaximumResponseBytes - response.body.size();
+            if (remaining > 0) {
+                const std::size_t kept = response.body.size();
+                response.body.resize(kept + remaining);
+                DWORD read = 0;
+                if (WinHttpReadData(request.get(), &response.body[kept],
+                                    static_cast<DWORD>(remaining), &read)) {
+                    response.body.resize(kept + read);
+                } else {
+                    response.body.resize(kept);
+                }
+            }
+            break;
         }
         const std::size_t old_size = response.body.size();
         response.body.resize(old_size + available);
@@ -658,12 +674,12 @@ const wchar_t* NetworkCode(Site site) {
 }
 
 std::wstring FormatExitRow(Site site, const std::wstring& result) {
-    constexpr std::size_t kSiteColumnWidth = 7; // YouTube / Netflix
+    // Tab-separated columns: a tooltip that expands tab stops aligns the arrow
+    // (and therefore the result) column regardless of the proportional font's
+    // glyph widths, which fixed-count space padding cannot do. Every site name
+    // fits inside the first tab stop, so one tab is enough for both columns.
     std::wstring line = SiteName(site);
-    if (line.size() < kSiteColumnWidth) {
-        line.append(kSiteColumnWidth - line.size(), L' ');
-    }
-    line += L" -> ";
+    line += L"\t-> ";
     line += result;
     return line;
 }
@@ -696,6 +712,85 @@ void AppendRegionalIndicator(std::wstring& text, wchar_t letter) {
     const unsigned int offset = code_point - 0x10000u;
     text.push_back(static_cast<wchar_t>(0xD800u + (offset >> 10)));
     text.push_back(static_cast<wchar_t>(0xDC00u + (offset & 0x3FFu)));
+}
+
+// Netflix embeds the authoritative exit region as
+// "requestCountry":{...,"id":"XX",...}. Read the first two-letter "id" that
+// follows a requestCountry object.
+std::wstring ParseRequestCountryId(const std::string& body) {
+    const std::string key = "\"requestCountry\"";
+    std::size_t pos = body.find(key);
+    while (pos != std::string::npos) {
+        const std::size_t brace = body.find('{', pos + key.size());
+        if (brace != std::string::npos) {
+            std::size_t id_pos = body.find("\"id\"", brace + 1);
+            // Only trust an "id" that stays within this small object.
+            while (id_pos != std::string::npos && id_pos < brace + 400) {
+                std::wstring code;
+                if (HasKeyPrefix(body, id_pos) &&
+                    ParseCountryValue(body, id_pos + 4, code)) {
+                    return code;
+                }
+                id_pos = body.find("\"id\"", id_pos + 4);
+            }
+        }
+        pos = body.find(key, pos + key.size());
+    }
+    return {};
+}
+
+// Last-resort heuristic: pair a "countryName" with the "id" that precedes it in
+// the same JSON object. Returns empty when signals are missing or ambiguous.
+std::wstring NetflixCountryNameHeuristic(const std::string& body) {
+    const std::string country_key = "\"countryName\"";
+    const std::string id_key = "\"id\"";
+    std::wstring candidate;
+
+    std::size_t country_pos = body.find(country_key);
+    while (country_pos != std::string::npos) {
+        if (HasKeyPrefix(body, country_pos)) {
+            if (!HasStringValue(body, country_pos + country_key.size())) {
+                if (!candidate.empty()) {
+                    return {};
+                }
+                country_pos = body.find(country_key, country_pos + country_key.size());
+                continue;
+            }
+            const std::size_t object_start = body.rfind('{', country_pos);
+            const std::size_t last_close = body.rfind('}', country_pos);
+            if (object_start == std::string::npos ||
+                (last_close != std::string::npos && last_close > object_start)) {
+                return {};
+            }
+
+            std::wstring object_id;
+            std::size_t id_pos = body.find(id_key, object_start + 1);
+            while (id_pos != std::string::npos && id_pos < country_pos) {
+                if (HasKeyPrefix(body, id_pos)) {
+                    std::wstring parsed_id;
+                    if (!ParseCountryValue(body, id_pos + id_key.size(), parsed_id)) {
+                        if (!candidate.empty()) {
+                            return {};
+                        }
+                        id_pos = body.find(id_key, id_pos + id_key.size());
+                        continue;
+                    }
+                    object_id = parsed_id;
+                }
+                id_pos = body.find(id_key, id_pos + id_key.size());
+            }
+            if (object_id.empty()) {
+                country_pos = body.find(country_key, country_pos + country_key.size());
+                continue;
+            }
+            if (!candidate.empty() && candidate != object_id) {
+                return {};
+            }
+            candidate = object_id;
+        }
+        country_pos = body.find(country_key, country_pos + country_key.size());
+    }
+    return candidate;
 }
 
 } // namespace
@@ -762,72 +857,36 @@ std::wstring ParseTraceCountry(const std::string& body) {
 }
 
 std::wstring ParseNetflixCountry(const std::string& body) {
-    const std::string country_key = "\"countryName\"";
-    const std::string id_key = "\"id\"";
-    std::wstring candidate;
-
-    std::size_t country_pos = body.find(country_key);
-    while (country_pos != std::string::npos) {
-        if (HasKeyPrefix(body, country_pos)) {
-            if (!HasStringValue(body, country_pos + country_key.size())) {
-                if (!candidate.empty()) {
-                    return {};
-                }
-                country_pos = body.find(country_key, country_pos + country_key.size());
-                continue;
-            }
-            const std::size_t object_start = body.rfind('{', country_pos);
-            const std::size_t last_close = body.rfind('}', country_pos);
-            if (object_start == std::string::npos ||
-                (last_close != std::string::npos && last_close > object_start)) {
-                return {};
-            }
-
-            std::wstring object_id;
-            std::size_t id_pos = body.find(id_key, object_start + 1);
-            while (id_pos != std::string::npos && id_pos < country_pos) {
-                if (HasKeyPrefix(body, id_pos)) {
-                    std::wstring parsed_id;
-                    if (!ParseCountryValue(body, id_pos + id_key.size(), parsed_id)) {
-                        if (!candidate.empty()) {
-                            return {};
-                        }
-                        id_pos = body.find(id_key, id_pos + id_key.size());
-                        continue;
-                    }
-                    object_id = parsed_id;
-                }
-                id_pos = body.find(id_key, id_pos + id_key.size());
-            }
-            if (object_id.empty()) {
-                country_pos = body.find(country_key, country_pos + country_key.size());
-                continue;
-            }
-            if (!candidate.empty() && candidate != object_id) {
-                return {};
-            }
-            candidate = object_id;
-        }
-        country_pos = body.find(country_key, country_pos + country_key.size());
+    // Reliable region signals that live in the first few KB of the page, so they
+    // survive huge or truncated responses and never conflict with each other.
+    std::wstring region = ParseLocaleCountry(body, "<html lang=\"");
+    if (!region.empty()) {
+        return region;
     }
-    if (!candidate.empty()) {
-        return candidate;
+    region = ParseLocaleCountry(body, "property=\"og:locale\" content=\"");
+    if (!region.empty()) {
+        return region;
     }
 
-    std::wstring country = ParseJsonCountry(body, "countryCode");
-    if (!country.empty()) {
-        return country;
-    }
-    country = ParseJsonCountry(body, "contentRegion");
-    if (!country.empty()) {
-        return country;
+    // Authoritative geo field embedded deeper in the page.
+    region = ParseRequestCountryId(body);
+    if (!region.empty()) {
+        return region;
     }
 
-    std::wstring locale_country = ParseLocaleCountry(body, "<html lang=\"");
-    if (!locale_country.empty()) {
-        return locale_country;
+    // Legacy JSON fields.
+    region = ParseJsonCountry(body, "countryCode");
+    if (!region.empty()) {
+        return region;
     }
-    return ParseLocaleCountry(body, "property=\"og:locale\" content=\"");
+    region = ParseJsonCountry(body, "contentRegion");
+    if (!region.empty()) {
+        return region;
+    }
+
+    // Object-pairing heuristic last: an ambiguous match here no longer discards
+    // the reliable signals above, since those were already checked.
+    return NetflixCountryNameHeuristic(body);
 }
 
 std::wstring ParseIpInfoCountry(const std::string& body) {
