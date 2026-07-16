@@ -12,6 +12,7 @@
 - **网络优先级**：智能选择最佳内网IP（192.168.x.x > 10.x.x.x > 172.16-31.x.x）
 - **代理软件监控**：检测到Clash、V2rayN等常见代理软件窗口打开/关闭/切换前台时，自动触发一次外网IP强制刷新，切换代理节点后无需等待缓存过期
 - **Claude IP风险检测**（可选，默认关闭）：对比Cloudflare出口IP、检测受限地区、探测Claude直连可达性、识别VPN/代理/机房IP、追踪30天IP波动
+- **常用站点出口检测**（可选，默认关闭）：检测Google、YouTube、OpenAI、Claude和Netflix实际访问出口的国家/地区及网络标识
 
 ## 📦 快速安装
 
@@ -104,6 +105,24 @@ JP 154.31.113.180
 - 受限地区名单与直连探测的判定逻辑均为社区经验整理，不代表Anthropic官方实时政策，仅供参考。
 - 该功能会引入额外的后台网络请求和一个后台线程，默认关闭，需用户主动启用。
 
+## 🌐 常用站点出口检测（可选功能）
+
+默认关闭，需在插件设置中勾选“启用出口检测”。启用后，悬浮提示底部会显示Google、YouTube、OpenAI、Claude和Netflix五个站点实际访问出口的国家/地区代码及网络标识；GitHub不在当前检测范围内。
+
+```text
+──── 出口检测 ────
+Google  ->  US GGL
+YouTube ->  JP GGL
+OpenAI  ->  US CF
+Claude  ->  US CF
+Netflix ->  JP NFLX
+```
+
+- `US`、`JP`等为两位国家/地区代码。
+- `GGL`、`CF`、`NFLX`分别是Google、Cloudflare和Netflix的网络标识。
+- 检测尚未完成时显示`-- WAIT`，请求失败或无法识别结果时显示`-- ----`。
+- 检测结果缓存10分钟；手动刷新外网IP或代理软件窗口变化会触发强制刷新。
+
 ## ⚙️ 配置选项
 
 打开TrafficMonitor设置 → 插件 → IP地址显示 → 选项：
@@ -158,6 +177,7 @@ enable_smart_cache=1           # 启用智能缓存
 fast_refresh_seconds=30        # 快速刷新间隔
 max_refresh_minutes=5          # 最大刷新间隔
 enable_claude_risk_check=0     # 启用Claude IP风险检测（默认关闭）
+enable_exit_detection=0        # 启用常用站点出口检测（默认关闭）
 ```
 
 ## 🐛 故障排除
@@ -209,6 +229,7 @@ enable_claude_risk_check=0     # 启用Claude IP风险检测（默认关闭）
 - `src/ip_utils.h/.cpp`：IP获取和智能缓存逻辑
 - `src/proxy_watch.h/.cpp`：代理软件窗口打开/关闭监控，命中时触发外网IP强制刷新
 - `src/claude_risk.h/.cpp`：Claude IP风险检测逻辑（Cloudflare对比、受限地区、直连探测、VPN/代理识别、IP波动追踪）
+- `src/exit_detection.h/.cpp`：常用站点出口国家/地区检测和Tooltip格式化
 - `src/plugin_options.h`：用户配置选项定义  
 - `src/plugin.h/.cpp`：插件主体实现
 - `src/options_dialog.h/.cpp`：设置对话框
