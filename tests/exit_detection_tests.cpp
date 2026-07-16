@@ -73,6 +73,7 @@ int main() {
     CHECK(ParseYouTubeCountry(R"(<SCRIPT>const fake='{"countryCode":"US"}';</SCRIPT>)").empty());
     CHECK(ParseYouTubeCountry(R"(<ScRiPt>const fake=`{"countryCode":"US"}`;</sCrIpT>)").empty());
     CHECK(ParseYouTubeCountry(R"(<SCRIPT>const data={"countryCode":"JP"};</SCRIPT>)") == L"JP");
+    CHECK(ParseYouTubeCountry(R"({"WEB_PLAYER_CONTEXT_CONFIG":{"contentRegion":"JP","hl":"ja_JP"}})") == L"JP");
 
     CHECK(ParseTraceCountry("ip=203.0.113.8\nloc=sg\ncolo=SIN\n") == L"SG");
     CHECK(ParseTraceCountry("location=US\n").empty());
@@ -86,6 +87,8 @@ int main() {
     CHECK(ParseNetflixCountry(R"({"countryName":"Hong Kong","id":"HK"})").empty());
     CHECK(ParseNetflixCountry(R"(<html>[ broken <script>{"id":"HK","countryName":"Hong Kong"}</script></html>)") == L"HK");
     CHECK(ParseNetflixCountry(R"({"id":"HK","countryName":"Hong Kong"garbage})").empty());
+    CHECK(ParseNetflixCountry(R"(<html lang="en-JP"><meta property="og:locale" content="en-JP"/>)") == L"JP");
+    CHECK(ParseNetflixCountry(R"(<html><meta property="og:locale" content="en-US"/>)") == L"US");
 
     CHECK(ParseIpInfoCountry(R"({"ip":"203.0.113.7","country":"us"})") == L"US");
     CHECK(ParseIpInfoCountry(R"({"country":"USA"})").empty());
@@ -127,6 +130,36 @@ int main() {
         CHECK(initial.sites[i].country_code.empty());
     }
 
+    CHECK(FormatTooltip(initial) ==
+          L"---- Exit Check ----\n"
+          L"Google\t->\t-- WAIT\n"
+          L"YouTube\t->\t-- WAIT\n"
+          L"OpenAI\t->\t-- WAIT\n"
+          L"Claude\t->\t-- WAIT\n"
+          L"GitHub\t->\t-- WAIT\n"
+          L"Netflix\t->\t-- WAIT");
+
+    Snapshot compact_ready = MakeInitialSnapshot();
+    compact_ready.has_completed = true;
+    compact_ready.sites[0] = {Site::Google, ResultState::Success, L"HK"};
+    compact_ready.sites[1] = {Site::YouTube, ResultState::Success, L"JP"};
+    compact_ready.sites[2] = {Site::OpenAI, ResultState::Success, L"US"};
+    compact_ready.sites[3] = {Site::Claude, ResultState::Success, L"SG"};
+    compact_ready.sites[4] = {Site::GitHub, ResultState::Unknown, L""};
+    compact_ready.sites[5] = {Site::Netflix, ResultState::Success, L"JP"};
+    CHECK(FormatTooltip(compact_ready) ==
+          L"---- Exit Check ----\n"
+          L"Google\t->\tHK GGL\n"
+          L"YouTube\t->\tJP GGL\n"
+          L"OpenAI\t->\tUS CF\n"
+          L"Claude\t->\tSG CF\n"
+          L"GitHub\t->\t-- ----\n"
+          L"Netflix\t->\tJP NFLX");
+
+    compact_ready.sites[0] = {Site::Google, ResultState::Success, L"1P"};
+    CHECK(FormatTooltip(compact_ready).find(L"Google\t->\t-- ----") != std::wstring::npos);
+
+#if 0
     const std::wstring pending_tooltip = FormatTooltip(initial);
     CHECK(pending_tooltip.find(L"──────── 出口检测 ────────") != std::wstring::npos);
     CHECK(pending_tooltip.find(L"Google   → ⏳ Detecting...") != std::wstring::npos);
@@ -162,6 +195,8 @@ int main() {
 
     ready.sites[0] = {Site::Google, ResultState::Success, L"1P"};
     CHECK(FormatTooltip(ready).find(L"Google   → ❔ Unknown") != std::wstring::npos);
+
+#endif
 
     if (g_failures > 0) {
         std::cerr << g_failures << " test(s) failed\n";

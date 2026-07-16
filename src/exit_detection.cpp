@@ -654,6 +654,41 @@ const SiteResult* FindSite(const Snapshot& snapshot, Site site) {
     return nullptr;
 }
 
+const wchar_t* NetworkCode(Site site) {
+    switch (site) {
+    case Site::Google: return L"GGL";
+    case Site::YouTube: return L"GGL";
+    case Site::OpenAI: return L"CF";
+    case Site::Claude: return L"CF";
+    case Site::GitHub: return L"GH";
+    case Site::Netflix: return L"NFLX";
+    default: return L"";
+    }
+}
+
+std::wstring ParseLocaleCountry(const std::string& body, const std::string& marker) {
+    std::size_t pos = body.find(marker);
+    while (pos != std::string::npos) {
+        pos += marker.size();
+        if (pos + 5 <= body.size() &&
+            std::isalpha(static_cast<unsigned char>(body[pos])) &&
+            std::isalpha(static_cast<unsigned char>(body[pos + 1])) &&
+            body[pos + 2] == '-' &&
+            std::isalpha(static_cast<unsigned char>(body[pos + 3])) &&
+            std::isalpha(static_cast<unsigned char>(body[pos + 4]))) {
+            std::wstring code = AsciiToWide(body.substr(pos + 3, 2));
+            for (wchar_t& ch : code) {
+                if (ch >= L'a' && ch <= L'z') {
+                    ch = static_cast<wchar_t>(ch - L'a' + L'A');
+                }
+            }
+            return code;
+        }
+        pos = body.find(marker, pos);
+    }
+    return {};
+}
+
 void AppendRegionalIndicator(std::wstring& text, wchar_t letter) {
     const unsigned int code_point = 0x1F1E6u + static_cast<unsigned int>(letter - L'A');
     const unsigned int offset = code_point - 0x10000u;
@@ -698,7 +733,11 @@ std::wstring ParseGoogleMappingIp(const std::string& body) {
 }
 
 std::wstring ParseYouTubeCountry(const std::string& body) {
-    return ParseJsonCountry(body, "countryCode");
+    std::wstring country = ParseJsonCountry(body, "countryCode");
+    if (!country.empty()) {
+        return country;
+    }
+    return ParseJsonCountry(body, "contentRegion");
 }
 
 std::wstring ParseTraceCountry(const std::string& body) {
@@ -760,7 +799,15 @@ std::wstring ParseNetflixCountry(const std::string& body) {
         }
         country_pos = body.find(country_key, country_pos + country_key.size());
     }
-    return candidate;
+    if (!candidate.empty()) {
+        return candidate;
+    }
+
+    std::wstring locale_country = ParseLocaleCountry(body, "<html lang=\"");
+    if (!locale_country.empty()) {
+        return locale_country;
+    }
+    return ParseLocaleCountry(body, "property=\"og:locale\" content=\"");
 }
 
 std::wstring ParseIpInfoCountry(const std::string& body) {
@@ -841,6 +888,36 @@ Snapshot MakeInitialSnapshot() {
 }
 
 std::wstring FormatTooltip(const Snapshot& snapshot) {
+    {
+        std::wstring tooltip = L"---- Exit Check ----";
+        for (std::size_t i = 0; i < static_cast<std::size_t>(Site::Count); ++i) {
+            const Site site = static_cast<Site>(i);
+            const std::wstring name = SiteName(site);
+            tooltip += L'\n';
+            tooltip += name;
+            tooltip += L"\t->\t";
+
+            const SiteResult* result = FindSite(snapshot, site);
+            if (!snapshot.has_completed ||
+                (result != nullptr && result->state == ResultState::Pending)) {
+                tooltip += L"-- WAIT";
+                continue;
+            }
+
+            if (result != nullptr && result->state == ResultState::Success) {
+                const std::wstring code = NormalizeCountryCode(result->country_code);
+                if (!code.empty()) {
+                    tooltip += code;
+                    tooltip += L' ';
+                    tooltip += NetworkCode(site);
+                    continue;
+                }
+            }
+            tooltip += L"-- ----";
+        }
+        return tooltip;
+    }
+
     std::wstring tooltip = L"──────── 出口检测 ────────";
     for (std::size_t i = 0; i < static_cast<std::size_t>(Site::Count); ++i) {
         const Site site = static_cast<Site>(i);
