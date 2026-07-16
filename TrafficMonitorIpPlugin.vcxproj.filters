@@ -17,6 +17,9 @@
     <ClCompile Include="src\claude_risk.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="src\exit_detection.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="src\ip_utils.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -35,6 +38,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="src\claude_risk.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="src\exit_detection.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="src\ip_item.h">
