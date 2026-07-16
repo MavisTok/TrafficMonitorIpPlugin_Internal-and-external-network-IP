@@ -444,7 +444,7 @@ IpWithCountry GetExternalIPv4WithCountry(const ExternalIpOptions& opt, bool forc
 
     // 步骤1: 初始化WinHTTP会话
     HINTERNET hSession = WinHttpOpen(L"TrafficMonitorIpPlugin/1.0",
-                                     WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                     WINHTTP_ACCESS_TYPE_NO_PROXY,
                                      WINHTTP_NO_PROXY_NAME,
                                      WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return result;  // 会话创建失败
