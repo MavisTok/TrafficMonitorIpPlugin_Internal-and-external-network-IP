@@ -909,7 +909,8 @@ std::wstring ParseNetflixCountry(const std::string& body) {
                 id_pos = body.find(id_key, id_pos + id_key.size());
             }
             if (object_id.empty()) {
-                return {};
+                country_pos = body.find(country_key, country_pos + country_key.size());
+                continue;
             }
             if (!candidate.empty() && candidate != object_id) {
                 return {};

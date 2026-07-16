@@ -87,6 +87,7 @@ int main() {
     CHECK(ParseNetflixCountry(R"({"countryName":"Hong Kong","id":"HK"})").empty());
     CHECK(ParseNetflixCountry(R"(<html>[ broken <script>{"id":"HK","countryName":"Hong Kong"}</script></html>)") == L"HK");
     CHECK(ParseNetflixCountry(R"({"id":"HK","countryName":"Hong Kong"garbage})").empty());
+    CHECK(ParseNetflixCountry(R"(<html lang="en-US"><script>{"countryName":"United States","defaultLocale":"en","status":"ALLOW"}</script></html>)") == L"US");
     CHECK(ParseNetflixCountry(R"(<html lang="en-JP"><meta property="og:locale" content="en-JP"/>)") == L"JP");
     CHECK(ParseNetflixCountry(R"(<html><meta property="og:locale" content="en-US"/>)") == L"US");
 
