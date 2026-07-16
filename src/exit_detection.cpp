@@ -5,7 +5,6 @@
 #include <winhttp.h>
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <memory>
 #include <mutex>
@@ -658,120 +657,13 @@ const wchar_t* NetworkCode(Site site) {
     }
 }
 
-class ScreenDc {
-public:
-    ScreenDc() : dc_(GetDC(nullptr)) {}
-    ~ScreenDc() {
-        if (dc_ != nullptr) {
-            ReleaseDC(nullptr, dc_);
-        }
-    }
-    HDC get() const { return dc_; }
-
-private:
-    HDC dc_{};
-};
-
-class TooltipFont {
-public:
-    explicit TooltipFont(HDC dc) : dc_(dc) {
-        if (dc_ == nullptr) {
-            return;
-        }
-
-        NONCLIENTMETRICSW metrics{};
-        metrics.cbSize = sizeof(metrics);
-        if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, metrics.cbSize, &metrics, 0)) {
-            font_ = CreateFontIndirectW(&metrics.lfStatusFont);
-        }
-        if (font_ == nullptr) {
-            font_ = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-        }
-        if (font_ != nullptr) {
-            old_font_ = static_cast<HFONT>(SelectObject(dc_, font_));
-        }
-    }
-
-    ~TooltipFont() {
-        if (dc_ != nullptr && old_font_ != nullptr) {
-            SelectObject(dc_, old_font_);
-        }
-        if (font_ != nullptr && font_ != GetStockObject(DEFAULT_GUI_FONT)) {
-            DeleteObject(font_);
-        }
-    }
-
-    TooltipFont(const TooltipFont&) = delete;
-    TooltipFont& operator=(const TooltipFont&) = delete;
-
-private:
-    HDC dc_{};
-    HFONT font_{};
-    HFONT old_font_{};
-};
-
-int TextWidth(HDC dc, const std::wstring& text) {
-    if (dc == nullptr || text.empty()) {
-        return 0;
-    }
-    SIZE size{};
-    if (!GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size)) {
-        return static_cast<int>(text.size()) * 8;
-    }
-    return size.cx;
-}
-
-std::wstring SpacesToReach(HDC dc, const std::wstring& prefix, int target_width) {
-    constexpr std::array<wchar_t, 4> kBlankChars = {L' ', L'\u2007', L'\u2009', L'\u200A'};
-
-    std::wstring spaces;
-    int width = TextWidth(dc, prefix);
-    while (width < target_width && spaces.size() < 64) {
-        wchar_t best_char = L' ';
-        int best_width = 0;
-        int best_delta = target_width;
-        bool found_under_target = false;
-
-        for (const wchar_t blank : kBlankChars) {
-            std::wstring candidate = prefix + spaces;
-            candidate.push_back(blank);
-            const int candidate_width = TextWidth(dc, candidate);
-            if (candidate_width <= width) {
-                continue;
-            }
-
-            const int delta = target_width - candidate_width;
-            if (delta >= 0) {
-                if (!found_under_target || delta < best_delta) {
-                    best_char = blank;
-                    best_width = candidate_width;
-                    best_delta = delta;
-                    found_under_target = true;
-                }
-            } else if (!found_under_target && -delta < best_delta) {
-                best_char = blank;
-                best_width = candidate_width;
-                best_delta = -delta;
-            }
-        }
-
-        if (best_width <= width) {
-            break;
-        }
-        spaces.push_back(best_char);
-        width = best_width;
-    }
-    return spaces;
-}
-
-std::wstring FormatExitRow(HDC dc, Site site, const std::wstring& result) {
-    constexpr int kArrowColumn = 66;
-    constexpr int kResultColumn = 102;
-
+std::wstring FormatExitRow(Site site, const std::wstring& result) {
+    constexpr std::size_t kSiteColumnWidth = 7; // YouTube / Netflix
     std::wstring line = SiteName(site);
-    line += SpacesToReach(dc, line, kArrowColumn);
-    line += L"->";
-    line += SpacesToReach(dc, line, kResultColumn);
+    if (line.size() < kSiteColumnWidth) {
+        line.append(kSiteColumnWidth - line.size(), L' ');
+    }
+    line += L" -> ";
     line += result;
     return line;
 }
@@ -878,7 +770,11 @@ std::wstring ParseNetflixCountry(const std::string& body) {
     while (country_pos != std::string::npos) {
         if (HasKeyPrefix(body, country_pos)) {
             if (!HasStringValue(body, country_pos + country_key.size())) {
-                return {};
+                if (!candidate.empty()) {
+                    return {};
+                }
+                country_pos = body.find(country_key, country_pos + country_key.size());
+                continue;
             }
             const std::size_t object_start = body.rfind('{', country_pos);
             const std::size_t last_close = body.rfind('}', country_pos);
@@ -893,7 +789,11 @@ std::wstring ParseNetflixCountry(const std::string& body) {
                 if (HasKeyPrefix(body, id_pos)) {
                     std::wstring parsed_id;
                     if (!ParseCountryValue(body, id_pos + id_key.size(), parsed_id)) {
-                        return {};
+                        if (!candidate.empty()) {
+                            return {};
+                        }
+                        id_pos = body.find(id_key, id_pos + id_key.size());
+                        continue;
                     }
                     object_id = parsed_id;
                 }
@@ -912,6 +812,15 @@ std::wstring ParseNetflixCountry(const std::string& body) {
     }
     if (!candidate.empty()) {
         return candidate;
+    }
+
+    std::wstring country = ParseJsonCountry(body, "countryCode");
+    if (!country.empty()) {
+        return country;
+    }
+    country = ParseJsonCountry(body, "contentRegion");
+    if (!country.empty()) {
+        return country;
     }
 
     std::wstring locale_country = ParseLocaleCountry(body, "<html lang=\"");
@@ -961,8 +870,6 @@ Snapshot MakeInitialSnapshot() {
 }
 
 std::wstring FormatTooltip(const Snapshot& snapshot) {
-    ScreenDc screen_dc;
-    TooltipFont tooltip_font(screen_dc.get());
     std::wstring tooltip = L"---- Exit Check ----";
     for (std::size_t i = 0; i < static_cast<std::size_t>(Site::Count); ++i) {
         const Site site = static_cast<Site>(i);
@@ -985,7 +892,7 @@ std::wstring FormatTooltip(const Snapshot& snapshot) {
         }
 
         tooltip += L'\n';
-        tooltip += FormatExitRow(screen_dc.get(), site, value);
+        tooltip += FormatExitRow(site, value);
     }
     return tooltip;
 }

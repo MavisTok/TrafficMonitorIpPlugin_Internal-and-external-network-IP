@@ -88,6 +88,8 @@ int main() {
     CHECK(ParseNetflixCountry(R"(<html>[ broken <script>{"id":"HK","countryName":"Hong Kong"}</script></html>)") == L"HK");
     CHECK(ParseNetflixCountry(R"({"id":"HK","countryName":"Hong Kong"garbage})").empty());
     CHECK(ParseNetflixCountry(R"(<html lang="en-US"><script>{"countryName":"United States","defaultLocale":"en","status":"ALLOW"}</script></html>)") == L"US");
+    CHECK(ParseNetflixCountry(R"(<script>{"contentRegion":"JP"}</script>)") == L"JP");
+    CHECK(ParseNetflixCountry(R"(<html><head><meta data-rh="true" property="og:locale" content="en-US"/></head></html>)") == L"US");
     CHECK(ParseNetflixCountry(R"(<html lang="en-JP"><meta property="og:locale" content="en-JP"/>)") == L"JP");
     CHECK(ParseNetflixCountry(R"(<html><meta property="og:locale" content="en-US"/>)") == L"US");
 
@@ -128,6 +130,9 @@ int main() {
     const std::wstring initial_tooltip = FormatTooltip(initial);
     CHECK(initial_tooltip.find(L"---- Exit Check ----") != std::wstring::npos);
     CHECK(initial_tooltip.find(L"Google") != std::wstring::npos);
+    CHECK(initial_tooltip.find(L"Google  ->") != std::wstring::npos);
+    CHECK(initial_tooltip.find(L"YouTube ->") != std::wstring::npos);
+    CHECK(initial_tooltip.find(L"Netflix ->") != std::wstring::npos);
     CHECK(initial_tooltip.find(L"->") != std::wstring::npos);
     CHECK(initial_tooltip.find(L"-- WAIT") != std::wstring::npos);
     CHECK(initial_tooltip.find(L"GitHub") == std::wstring::npos);
