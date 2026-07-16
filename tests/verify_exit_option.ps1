@@ -54,6 +54,10 @@ Assert-Match 'options dialog height is 180' `
 Assert-Match 'exit detection checkbox is present around y=115' `
     $pluginRc 'IDC_CHECK_EXIT_DETECTION[^\r\n]*,\s*10,\s*115,\s*\d+,\s*12'
 
+$exitDetectionLabel = -join ([char]0x542F, [char]0x7528, [char]0x51FA, [char]0x53E3, [char]0x68C0, [char]0x6D4B)
+Assert-Contains 'exit detection checkbox label is correct' `
+    $pluginRc "CONTROL `"$exitDetectionLabel`", IDC_CHECK_EXIT_DETECTION"
+
 Assert-Match 'OK button moved to y=145' `
     $pluginRc 'DEFPUSHBUTTON\s+[^,\r\n]+,\s*IDOK,\s*110,\s*145,\s*50,\s*14'
 
@@ -80,5 +84,20 @@ Assert-Contains 'SaveOptions writes enable_exit_detection key' `
 
 Assert-Contains 'SaveOptions writes enable_exit_detection value' `
     $pluginCpp $saveValueNeedle
+
+$forbiddenIntegrationFiles = @(
+    'src/ip_item.h',
+    'src/plugin.h',
+    'src/exit_detection.cpp',
+    'src/exit_detection.h'
+)
+
+foreach ($relativePath in $forbiddenIntegrationFiles) {
+    $content = Read-Text $relativePath
+    if ($content.Contains('enable_exit_detection')) {
+        throw "Exit detection option was integrated too early in: $relativePath"
+    }
+}
+Write-Host 'OK: exit detection option is not integrated into tooltip or refresh yet'
 
 Write-Host 'All exit detection option checks passed.'
