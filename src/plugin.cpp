@@ -79,6 +79,9 @@ void TMIpPlugin::DataRequired() {
         claude_risk::RequestClaudeRiskRefreshAsync(
             config_dir_, item_.ExternalIpRaw(), item_.ExternalCountryRaw(), force_refresh_requested);
     }
+    if (options_.enable_exit_detection) {
+        exit_detection::RequestRefreshAsync(force_refresh_requested);
+    }
 
     const auto& v = item_.RawValue();
 
@@ -95,6 +98,7 @@ void TMIpPlugin::DataRequired() {
             tooltip_ = L"请在选项中启用IP显示";
         }
         AppendClaudeRiskTooltip();
+        AppendExitDetectionTooltip();
         return;
     }
 
@@ -130,6 +134,7 @@ void TMIpPlugin::DataRequired() {
     }
 
     AppendClaudeRiskTooltip();
+    AppendExitDetectionTooltip();
 }
 
 void TMIpPlugin::AppendClaudeRiskTooltip() {
@@ -196,6 +201,16 @@ void TMIpPlugin::AppendClaudeRiskTooltip() {
         case claude_risk::RotationLevel::Severe: tooltip_ += L"（严重警告）"; break;
         default: break;
     }
+}
+
+void TMIpPlugin::AppendExitDetectionTooltip() {
+    if (!options_.enable_exit_detection) return;
+
+    const std::wstring exit_tooltip =
+        exit_detection::FormatTooltip(exit_detection::GetSnapshot());
+    if (exit_tooltip.empty()) return;
+    if (!tooltip_.empty()) tooltip_ += L"\n";
+    tooltip_ += exit_tooltip;
 }
 
 void TMIpPlugin::ShowClaudeRiskReport(HWND hWnd) {

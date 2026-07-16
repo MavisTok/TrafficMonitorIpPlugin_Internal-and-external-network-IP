@@ -85,19 +85,21 @@ Assert-Contains 'SaveOptions writes enable_exit_detection key' `
 Assert-Contains 'SaveOptions writes enable_exit_detection value' `
     $pluginCpp $saveValueNeedle
 
-$forbiddenIntegrationFiles = @(
-    'src/ip_item.h',
-    'src/plugin.h',
-    'src/exit_detection.cpp',
-    'src/exit_detection.h'
-)
+Assert-Match 'plugin declares exit detection tooltip helper' `
+    (Read-Text 'src/plugin.h') 'void\s+AppendExitDetectionTooltip\(\)'
 
-foreach ($relativePath in $forbiddenIntegrationFiles) {
-    $content = Read-Text $relativePath
-    if ($content.Contains('enable_exit_detection')) {
-        throw "Exit detection option was integrated too early in: $relativePath"
-    }
-}
-Write-Host 'OK: exit detection option is not integrated into tooltip or refresh yet'
+Assert-Match 'DataRequired refreshes exit detection only when enabled' `
+    $pluginCpp 'if\s*\(\s*options_\.enable_exit_detection\s*\)\s*\{[\s\S]*exit_detection::RequestRefreshAsync\(force_refresh_requested\)'
+
+Assert-Match 'empty tooltip path appends exit detection' `
+    $pluginCpp 'AppendClaudeRiskTooltip\(\);\s*AppendExitDetectionTooltip\(\);\s*return;'
+
+Assert-Match 'normal tooltip path appends exit detection after Claude risk' `
+    $pluginCpp 'AppendClaudeRiskTooltip\(\);\s*AppendExitDetectionTooltip\(\);'
+
+Assert-Match 'exit detection tooltip uses formatted snapshot' `
+    $pluginCpp 'exit_detection::FormatTooltip\(exit_detection::GetSnapshot\(\)\)'
+
+Write-Host 'OK: exit detection option is integrated into refresh and tooltip'
 
 Write-Host 'All exit detection option checks passed.'

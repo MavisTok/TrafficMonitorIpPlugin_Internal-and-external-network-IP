@@ -166,6 +166,7 @@ private:
     void LoadOptions();                                                           ///< 从配置文件加载选项
     void SaveOptions();                                                           ///< 保存选项到配置文件
     void AppendClaudeRiskTooltip();                                               ///< 在tooltip_末尾追加Claude风险检测段落
+    void AppendExitDetectionTooltip();                                             ///< 在tooltip_末尾追加常见网站出口检测段落
     void ShowClaudeRiskReport(HWND hWnd);                                         ///< 弹窗展示完整Claude风险报告
 
 private:
