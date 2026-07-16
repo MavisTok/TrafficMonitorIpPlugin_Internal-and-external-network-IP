@@ -1,50 +1,76 @@
-#include <cassert>
 #include <iostream>
 #include "../src/exit_detection.h"
 
 using namespace exit_detection;
 
+namespace {
+
+int g_failures = 0;
+
+void Check(bool condition, const char* expression, const char* file, int line) {
+    if (!condition) {
+        std::cerr << file << ':' << line << " CHECK failed: " << expression << '\n';
+        ++g_failures;
+    }
+}
+
+} // namespace
+
+#define CHECK(expression) Check(static_cast<bool>(expression), #expression, __FILE__, __LINE__)
+
 int main() {
-    assert(NormalizeCountryCode(L"jp") == L"JP");
-    assert(NormalizeCountryCode(L"USA").empty());
-    assert(NormalizeCountryCode(L"1P").empty());
-    assert(NormalizeCountryCode(L"").empty());
+    CHECK(NormalizeCountryCode(L"jp") == L"JP");
+    CHECK(NormalizeCountryCode(L"USA").empty());
+    CHECK(NormalizeCountryCode(L"1P").empty());
+    CHECK(NormalizeCountryCode(L"").empty());
 
-    assert(ParseGoogleMappingIp("203.0.113.7 => cache.googlevideo.com\n") == L"203.0.113.7");
-    assert(ParseGoogleMappingIp("not-an-ip => cache\n").empty());
-    assert(ParseGoogleMappingIp("1.2.3.4. => cache\n").empty());
-    assert(ParseGoogleMappingIp("").empty());
+    CHECK(ParseGoogleMappingIp("203.0.113.7 => cache.googlevideo.com\n") == L"203.0.113.7");
+    CHECK(ParseGoogleMappingIp("not-an-ip => cache\n").empty());
+    CHECK(ParseGoogleMappingIp("1.2.3.4. => cache\n").empty());
+    CHECK(ParseGoogleMappingIp("").empty());
 
-    assert(ParseYouTubeCountry(R"({"countryCode":"jp","premium":true})") == L"JP");
-    assert(ParseYouTubeCountry(R"({"premium":true})").empty());
-    assert(ParseYouTubeCountry(R"({"countryCode":"jp","nested":{"countryCode":"us"}})").empty());
-    assert(ParseYouTubeCountry(R"({"countryCode":"jp","nested":{"countryCode":"JP"}})") == L"JP");
-    assert(ParseYouTubeCountry(R"({"note":"escaped \"countryCode\":\"us\"","countryCode":"jp"})") == L"JP");
-    assert(ParseYouTubeCountry(R"({"countryCode":"jp})").empty());
-    assert(ParseYouTubeCountry(R"(["countryCode":"jp"])").empty());
+    CHECK(ParseYouTubeCountry(R"({"countryCode":"jp","premium":true})") == L"JP");
+    CHECK(ParseYouTubeCountry(R"({"premium":true})").empty());
+    CHECK(ParseYouTubeCountry(R"({"countryCode":"jp","nested":{"countryCode":"us"}})").empty());
+    CHECK(ParseYouTubeCountry(R"({"countryCode":"jp","nested":{"countryCode":"JP"}})") == L"JP");
+    CHECK(ParseYouTubeCountry(R"({"note":"escaped \"countryCode\":\"us\"","countryCode":"jp"})") == L"JP");
+    CHECK(ParseYouTubeCountry(R"({"countryCode":"jp})").empty());
+    CHECK(ParseYouTubeCountry(R"(["countryCode":"jp"])").empty());
+    CHECK(ParseYouTubeCountry(R"(<html>[ broken { <script>{"countryCode":"jp"}</script></html>)") == L"JP");
+    CHECK(ParseYouTubeCountry(R"({"countryCode":"j\p"})").empty());
+    CHECK(ParseYouTubeCountry(R"({"note":"countryCode":"jp"})").empty());
 
-    assert(ParseTraceCountry("ip=203.0.113.8\nloc=sg\ncolo=SIN\n") == L"SG");
-    assert(ParseTraceCountry("location=US\n").empty());
+    CHECK(ParseTraceCountry("ip=203.0.113.8\nloc=sg\ncolo=SIN\n") == L"SG");
+    CHECK(ParseTraceCountry("location=US\n").empty());
 
-    assert(ParseNetflixCountry(R"({"id":"HK","countryName":"Hong Kong"})") == L"HK");
-    assert(ParseNetflixCountry(R"({"countryName":"Hong Kong"})").empty());
-    assert(ParseNetflixCountry(R"({"a":{"id":"US"},"b":{"countryName":"Hong Kong"}})").empty());
-    assert(ParseNetflixCountry(R"({"id":"HK","countryName":)").empty());
-    assert(ParseNetflixCountry(R"({"id":"US","countryName":"United States","id":"CA","countryName":"Canada"})").empty());
-    assert(ParseNetflixCountry(R"({"countryName":"Hong Kong","id":"HK"})").empty());
+    CHECK(ParseNetflixCountry(R"({"id":"HK","countryName":"Hong Kong"})") == L"HK");
+    CHECK(ParseNetflixCountry(R"({"countryName":"Hong Kong"})").empty());
+    CHECK(ParseNetflixCountry(R"({"a":{"id":"US"},"b":{"countryName":"Hong Kong"}})").empty());
+    CHECK(ParseNetflixCountry(R"({"id":"HK","countryName":)").empty());
+    CHECK(ParseNetflixCountry(R"({"id":"HK","countryName":"Hong Kong","countryName":})").empty());
+    CHECK(ParseNetflixCountry(R"({"id":"US","countryName":"United States","id":"CA","countryName":"Canada"})").empty());
+    CHECK(ParseNetflixCountry(R"({"countryName":"Hong Kong","id":"HK"})").empty());
+    CHECK(ParseNetflixCountry(R"(<html>[ broken <script>{"id":"HK","countryName":"Hong Kong"}</script></html>)") == L"HK");
 
-    assert(ParseIpInfoCountry(R"({"ip":"203.0.113.7","country":"us"})") == L"US");
-    assert(ParseIpInfoCountry(R"({"country":"USA"})").empty());
-    assert(ParseIpInfoCountry(R"({"country":"us","nested":{"country":"ca"}})").empty());
-    assert(ParseIpInfoCountry("").empty());
+    CHECK(ParseIpInfoCountry(R"({"ip":"203.0.113.7","country":"us"})") == L"US");
+    CHECK(ParseIpInfoCountry(R"({"country":"USA"})").empty());
+    CHECK(ParseIpInfoCountry(R"({"country":"us","nested":{"country":"ca"}})").empty());
+    CHECK(ParseIpInfoCountry("").empty());
+    CHECK(ParseIpInfoCountry(R"(<html>} broken ] <script>{"country":"us"}</script></html>)") == L"US");
+    CHECK(ParseIpInfoCountry(R"({"country":"u\s"})").empty());
+    CHECK(ParseIpInfoCountry(R"({"note":"country":"us"})").empty());
 
-    assert(ParseGitHubCountry("server: github.com\r\nx-frame-options: deny\r\n").empty());
-    assert(ParseGitHubCountry("x-github-country: ca\r\n") == L"CA");
-    assert(ParseGitHubCountry("X-GitHub-Country: jp\r\n") == L"JP");
-    assert(ParseGitHubCountry("x-github-country-code: ca\r\n").empty());
-    assert(ParseGitHubCountry("x-github-country").empty());
-    assert(ParseGitHubCountry("").empty());
+    CHECK(ParseGitHubCountry("server: github.com\r\nx-frame-options: deny\r\n").empty());
+    CHECK(ParseGitHubCountry("x-github-country: ca\r\n") == L"CA");
+    CHECK(ParseGitHubCountry("X-GitHub-Country: jp\r\n") == L"JP");
+    CHECK(ParseGitHubCountry("x-github-country-code: ca\r\n").empty());
+    CHECK(ParseGitHubCountry("x-github-country").empty());
+    CHECK(ParseGitHubCountry("").empty());
 
+    if (g_failures > 0) {
+        std::cerr << g_failures << " test(s) failed\n";
+        return 1;
+    }
     std::cout << "exit_detection parser tests passed\n";
     return 0;
 }

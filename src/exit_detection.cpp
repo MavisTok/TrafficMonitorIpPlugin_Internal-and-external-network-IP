@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <vector>
 
 namespace exit_detection {
 namespace {
@@ -18,87 +17,80 @@ void SkipWhitespace(const std::string& text, std::size_t& pos) {
     }
 }
 
-bool ReadJsonString(const std::string& text, std::size_t& pos, std::string& value) {
-    if (pos >= text.size() || text[pos] != '"') {
+bool HasKeyPrefix(const std::string& text, std::size_t key_pos) {
+    std::size_t pos = key_pos;
+    while (pos > 0 && std::isspace(static_cast<unsigned char>(text[pos - 1]))) {
+        --pos;
+    }
+    return pos > 0 && (text[pos - 1] == '{' || text[pos - 1] == ',');
+}
+
+bool ParseCountryValue(const std::string& text,
+                       std::size_t key_end,
+                       std::wstring& country) {
+    std::size_t pos = key_end;
+    SkipWhitespace(text, pos);
+    if (pos >= text.size() || text[pos] != ':') {
         return false;
     }
-
-    value.clear();
     ++pos;
-    while (pos < text.size()) {
-        const char ch = text[pos++];
-        if (ch == '"') {
-            return true;
-        }
-        if (ch == '\\') {
-            if (pos >= text.size()) {
-                return false;
-            }
-            value.push_back(text[pos++]);
-        } else {
-            value.push_back(ch);
-        }
+    SkipWhitespace(text, pos);
+    if (pos + 3 >= text.size() || text[pos] != '"' || text[pos + 3] != '"') {
+        return false;
     }
-    return false;
+    const unsigned char first = static_cast<unsigned char>(text[pos + 1]);
+    const unsigned char second = static_cast<unsigned char>(text[pos + 2]);
+    if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')) ||
+        !((second >= 'a' && second <= 'z') || (second >= 'A' && second <= 'Z'))) {
+        return false;
+    }
+    country = NormalizeCountryCode(AsciiToWide(text.substr(pos + 1, 2)));
+    return !country.empty();
 }
 
 std::wstring ParseJsonCountry(const std::string& body, const std::string& field) {
-    std::vector<char> containers;
+    const std::string key = "\"" + field + "\"";
     std::wstring country;
-    bool saw_root = false;
-
-    std::size_t pos = 0;
-    while (pos < body.size()) {
-        const char ch = body[pos];
-        if (ch == '{' || ch == '[') {
-            containers.push_back(ch);
-            saw_root = true;
-            ++pos;
-            continue;
-        }
-        if (ch == '}' || ch == ']') {
-            if (containers.empty() ||
-                (ch == '}' && containers.back() != '{') ||
-                (ch == ']' && containers.back() != '[')) {
+    std::size_t key_pos = body.find(key);
+    while (key_pos != std::string::npos) {
+        std::wstring candidate;
+        if (HasKeyPrefix(body, key_pos) &&
+            ParseCountryValue(body, key_pos + key.size(), candidate)) {
+            if (!country.empty() && country != candidate) {
                 return {};
             }
-            containers.pop_back();
-            ++pos;
-            continue;
+            country = candidate;
         }
-        if (ch != '"') {
-            ++pos;
-            continue;
-        }
-
-        std::string key;
-        if (!ReadJsonString(body, pos, key)) {
-            return {};
-        }
-        std::size_t value_pos = pos;
-        SkipWhitespace(body, value_pos);
-        if (containers.empty() || containers.back() != '{' || key != field ||
-            value_pos >= body.size() || body[value_pos] != ':') {
-            continue;
-        }
-        ++value_pos;
-        SkipWhitespace(body, value_pos);
-        std::string value;
-        if (!ReadJsonString(body, value_pos, value)) {
-            continue;
-        }
-
-        const std::wstring normalized = NormalizeCountryCode(AsciiToWide(value));
-        if (normalized.empty()) {
-            continue;
-        }
-        if (!country.empty() && country != normalized) {
-            return {};
-        }
-        country = normalized;
+        key_pos = body.find(key, key_pos + key.size());
     }
+    return country;
+}
 
-    return saw_root && containers.empty() ? country : L"";
+bool HasStringValue(const std::string& text, std::size_t key_end) {
+    std::size_t pos = key_end;
+    SkipWhitespace(text, pos);
+    if (pos >= text.size() || text[pos] != ':') {
+        return false;
+    }
+    ++pos;
+    SkipWhitespace(text, pos);
+    if (pos >= text.size() || text[pos] != '"') {
+        return false;
+    }
+    ++pos;
+    while (pos < text.size()) {
+        if (text[pos] == '\\') {
+            if (pos + 1 >= text.size()) {
+                return false;
+            }
+            pos += 2;
+        } else if (text[pos] == '"') {
+            return true;
+        } else {
+            ++pos;
+        }
+    }
+    return false;
 }
 
 bool IsIpv4(const std::string& value) {
@@ -196,98 +188,44 @@ std::wstring ParseTraceCountry(const std::string& body) {
 }
 
 std::wstring ParseNetflixCountry(const std::string& body) {
-    struct ObjectFields {
-        std::vector<std::wstring> ids;
-        std::size_t country_names = 0;
-        bool id_after_country_name = false;
-    };
-
-    std::vector<char> containers;
-    std::vector<ObjectFields> objects;
+    const std::string country_key = "\"countryName\"";
+    const std::string id_key = "\"id\"";
     std::wstring candidate;
-    bool ambiguous = false;
-    bool saw_root = false;
 
-    std::size_t pos = 0;
-    while (pos < body.size()) {
-        const char ch = body[pos];
-        if (ch == '{') {
-            containers.push_back(ch);
-            objects.emplace_back();
-            saw_root = true;
-            ++pos;
-            continue;
-        }
-        if (ch == '[') {
-            containers.push_back(ch);
-            saw_root = true;
-            ++pos;
-            continue;
-        }
-        if (ch == '}' || ch == ']') {
-            if (containers.empty() ||
-                (ch == '}' && containers.back() != '{') ||
-                (ch == ']' && containers.back() != '[')) {
+    std::size_t country_pos = body.find(country_key);
+    while (country_pos != std::string::npos) {
+        if (HasKeyPrefix(body, country_pos)) {
+            if (!HasStringValue(body, country_pos + country_key.size())) {
                 return {};
             }
-            if (ch == '}') {
-                ObjectFields fields = objects.back();
-                objects.pop_back();
-                if (fields.id_after_country_name) {
-                    ambiguous = true;
-                } else if (!fields.ids.empty() && fields.country_names > 0) {
-                    if (fields.ids.size() != 1 || fields.country_names != 1 ||
-                        !candidate.empty()) {
-                        ambiguous = true;
-                    } else {
-                        candidate = fields.ids.front();
+            const std::size_t object_start = body.rfind('{', country_pos);
+            const std::size_t last_close = body.rfind('}', country_pos);
+            if (object_start == std::string::npos ||
+                (last_close != std::string::npos && last_close > object_start)) {
+                return {};
+            }
+
+            std::wstring object_id;
+            std::size_t id_pos = body.find(id_key, object_start + 1);
+            while (id_pos != std::string::npos && id_pos < country_pos) {
+                if (HasKeyPrefix(body, id_pos)) {
+                    std::wstring parsed_id;
+                    if (!ParseCountryValue(body, id_pos + id_key.size(), parsed_id)) {
+                        return {};
                     }
+                    object_id = parsed_id;
                 }
+                id_pos = body.find(id_key, id_pos + id_key.size());
             }
-            containers.pop_back();
-            ++pos;
-            continue;
-        }
-        if (ch != '"') {
-            ++pos;
-            continue;
-        }
-
-        std::string key;
-        if (!ReadJsonString(body, pos, key)) {
-            return {};
-        }
-        std::size_t value_pos = pos;
-        SkipWhitespace(body, value_pos);
-        if (objects.empty() || containers.empty() || containers.back() != '{' ||
-            value_pos >= body.size() || body[value_pos] != ':') {
-            continue;
-        }
-        ++value_pos;
-        SkipWhitespace(body, value_pos);
-        std::string value;
-        if (!ReadJsonString(body, value_pos, value)) {
-            if (key == "id" || key == "countryName") {
+            if (object_id.empty()) {
                 return {};
             }
-            continue;
-        }
-        if (key == "id") {
-            const std::wstring id = NormalizeCountryCode(AsciiToWide(value));
-            if (!id.empty()) {
-                if (objects.back().country_names > 0) {
-                    objects.back().id_after_country_name = true;
-                } else {
-                    objects.back().ids.push_back(id);
-                }
+            if (!candidate.empty() && candidate != object_id) {
+                return {};
             }
-        } else if (key == "countryName") {
-            ++objects.back().country_names;
+            candidate = object_id;
         }
-    }
-
-    if (!saw_root || !containers.empty() || !objects.empty() || ambiguous) {
-        return {};
+        country_pos = body.find(country_key, country_pos + country_key.size());
     }
     return candidate;
 }
