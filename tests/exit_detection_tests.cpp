@@ -133,15 +133,16 @@ int main() {
     }
 
     const std::wstring initial_tooltip = FormatTooltip(initial);
-    CHECK(initial_tooltip.find(L"---- Exit Check ----") != std::wstring::npos);
-    CHECK(initial_tooltip.find(L"Google") != std::wstring::npos);
-    CHECK(initial_tooltip.find(L"Google\t->") != std::wstring::npos);
-    CHECK(initial_tooltip.find(L"YouTube\t->") != std::wstring::npos);
-    CHECK(initial_tooltip.find(L"Netflix\t->") != std::wstring::npos);
-    CHECK(initial_tooltip.find(L"->") != std::wstring::npos);
-    CHECK(initial_tooltip.find(L"-- WAIT") != std::wstring::npos);
+    const std::wstring expected_initial_tooltip =
+        L"──── 出口检测 ────\n"
+        L"Google  ->  -- WAIT\n"
+        L"YouTube ->  -- WAIT\n"
+        L"OpenAI  ->  -- WAIT\n"
+        L"Claude  ->  -- WAIT\n"
+        L"Netflix ->  -- WAIT";
+    CHECK(initial_tooltip == expected_initial_tooltip);
+    CHECK(initial_tooltip.find(L'\t') == std::wstring::npos);
     CHECK(initial_tooltip.find(L"GitHub") == std::wstring::npos);
-    CHECK(initial_tooltip.find(L'\t') != std::wstring::npos);
 
     Snapshot compact_ready = MakeInitialSnapshot();
     compact_ready.has_completed = true;
@@ -151,14 +152,16 @@ int main() {
     compact_ready.sites[3] = {Site::Claude, ResultState::Success, L"SG"};
     compact_ready.sites[4] = {Site::Netflix, ResultState::Success, L"JP"};
     const std::wstring compact_tooltip = FormatTooltip(compact_ready);
-    CHECK(compact_tooltip.find(L"Google") != std::wstring::npos);
-    CHECK(compact_tooltip.find(L"HK GGL") != std::wstring::npos);
-    CHECK(compact_tooltip.find(L"JP GGL") != std::wstring::npos);
-    CHECK(compact_tooltip.find(L"US CF") != std::wstring::npos);
-    CHECK(compact_tooltip.find(L"SG CF") != std::wstring::npos);
-    CHECK(compact_tooltip.find(L"JP NFLX") != std::wstring::npos);
-    CHECK(compact_tooltip.find(L"\t") != std::wstring::npos);
-    CHECK(compact_tooltip.find(L"🇭") == std::wstring::npos);
+    const std::wstring expected_tooltip =
+        L"──── 出口检测 ────\n"
+        L"Google  ->  HK GGL\n"
+        L"YouTube ->  JP GGL\n"
+        L"OpenAI  ->  US CF\n"
+        L"Claude  ->  SG CF\n"
+        L"Netflix ->  JP NFLX";
+    CHECK(compact_tooltip == expected_tooltip);
+    CHECK(compact_tooltip.find(L'\t') == std::wstring::npos);
+    CHECK(compact_tooltip.find(L"GitHub") == std::wstring::npos);
 
     compact_ready.sites[0] = {Site::Google, ResultState::Success, L"1P"};
     CHECK(FormatTooltip(compact_ready).find(L"-- ----") != std::wstring::npos);

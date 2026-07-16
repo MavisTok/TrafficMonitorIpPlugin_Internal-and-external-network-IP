@@ -674,12 +674,12 @@ const wchar_t* NetworkCode(Site site) {
 }
 
 std::wstring FormatExitRow(Site site, const std::wstring& result) {
-    // Tab-separated columns: a tooltip that expands tab stops aligns the arrow
-    // (and therefore the result) column regardless of the proportional font's
-    // glyph widths, which fixed-count space padding cannot do. Every site name
-    // fits inside the first tab stop, so one tab is enough for both columns.
+    constexpr std::size_t kSiteColumnWidth = 7;
     std::wstring line = SiteName(site);
-    line += L"\t-> ";
+    if (line.size() < kSiteColumnWidth) {
+        line.append(kSiteColumnWidth - line.size(), L' ');
+    }
+    line += L" ->  ";
     line += result;
     return line;
 }
@@ -929,7 +929,7 @@ Snapshot MakeInitialSnapshot() {
 }
 
 std::wstring FormatTooltip(const Snapshot& snapshot) {
-    std::wstring tooltip = L"---- Exit Check ----";
+    std::wstring tooltip = L"──── 出口检测 ────";
     for (std::size_t i = 0; i < static_cast<std::size_t>(Site::Count); ++i) {
         const Site site = static_cast<Site>(i);
 
