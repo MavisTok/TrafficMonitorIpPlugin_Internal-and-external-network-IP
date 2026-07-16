@@ -167,6 +167,7 @@ static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
         SetCheck(hDlg, IDC_CHECK_INTERNAL, s_opts->show_internal);
         SetCheck(hDlg, IDC_CHECK_EXTERNAL, s_opts->show_external);
         SetCheck(hDlg, IDC_CHECK_CLAUDE_RISK, s_opts->enable_claude_risk_check);
+        SetCheck(hDlg, IDC_CHECK_EXIT_DETECTION, s_opts->enable_exit_detection);
         SetupAdapterCombo(hDlg, IDC_EDIT_ADAPTER, s_opts->preferred_adapter);
         SetEdit(hDlg, IDC_EDIT_REFRESH, std::to_wstring(s_opts->external_refresh.count()));
         SetEdit(hDlg, IDC_EDIT_SEPARATOR, s_opts->separator);
@@ -180,6 +181,7 @@ static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
             new_opts.show_internal = GetCheck(hDlg, IDC_CHECK_INTERNAL);
             new_opts.show_external = GetCheck(hDlg, IDC_CHECK_EXTERNAL);
             new_opts.enable_claude_risk_check = GetCheck(hDlg, IDC_CHECK_CLAUDE_RISK);
+            new_opts.enable_exit_detection = GetCheck(hDlg, IDC_CHECK_EXIT_DETECTION);
             new_opts.preferred_adapter = GetSelectedAdapter(hDlg, IDC_EDIT_ADAPTER);
             {
                 std::wstring s = GetEdit(hDlg, IDC_EDIT_REFRESH);
@@ -195,6 +197,7 @@ static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
             bool changed = (new_opts.show_internal != s_opts->show_internal)
                 || (new_opts.show_external != s_opts->show_external)
                 || (new_opts.enable_claude_risk_check != s_opts->enable_claude_risk_check)
+                || (new_opts.enable_exit_detection != s_opts->enable_exit_detection)
                 || (new_opts.preferred_adapter != s_opts->preferred_adapter)
                 || (new_opts.external_refresh != s_opts->external_refresh)
                 || (new_opts.separator != s_opts->separator);

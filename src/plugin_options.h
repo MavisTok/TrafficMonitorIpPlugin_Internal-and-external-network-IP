@@ -33,6 +33,9 @@ struct PluginOptions {
     // === Claude IP风险检测 ===
     bool enable_claude_risk_check = false;              ///< 启用Claude IP风险检测（默认关闭）
 
+    // === 出口检测 ===
+    bool enable_exit_detection = false;                  ///< 启用出口检测（默认关闭，用户主动启用后才检测）
+
     // === 界面配置 ===
     std::wstring separator = L" | ";                   ///< 内外网IP之间的分隔符
 };

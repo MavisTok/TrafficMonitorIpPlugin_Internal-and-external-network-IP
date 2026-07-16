@@ -334,6 +334,8 @@ void TMIpPlugin::LoadOptions() {
 
         options_.enable_claude_risk_check = GetPrivateProfileIntW(
             L"ip", L"enable_claude_risk_check", options_.enable_claude_risk_check ? 1 : 0, ini.c_str()) != 0;
+        options_.enable_exit_detection = GetPrivateProfileIntW(
+            L"ip", L"enable_exit_detection", options_.enable_exit_detection ? 1 : 0, ini.c_str()) != 0;
     }
 }
 
@@ -349,6 +351,8 @@ void TMIpPlugin::SaveOptions() {
     WritePrivateProfileStringW(L"ip", L"separator", options_.separator.c_str(), ini.c_str());
     WritePrivateProfileStringW(L"ip", L"enable_claude_risk_check",
                                 options_.enable_claude_risk_check ? L"1" : L"0", ini.c_str());
+    WritePrivateProfileStringW(L"ip", L"enable_exit_detection",
+                                options_.enable_exit_detection ? L"1" : L"0", ini.c_str());
 }
 
 // === IpPluginItem 自定义绘制函数实现 ===
