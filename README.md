@@ -10,7 +10,8 @@
 - **智能缓存**：网络变化时快速响应（30秒），稳定时节能运行（2-5分钟）
 - **国家标识**：外网IP前显示国家代码（CN、US、JP等）
 - **网络优先级**：智能选择最佳内网IP（192.168.x.x > 10.x.x.x > 172.16-31.x.x）
-- **代理软件监控**：检测到Clash、V2rayN等常见代理软件窗口打开/关闭/切换前台时，自动触发一次外网IP强制刷新，切换代理节点后无需等待缓存过期
+- **后台刷新**：外网查询不阻塞显示回调，刷新期间保留上次成功结果，失败后间隔30秒重试
+- **代理软件监控**：检测到Clash、V2rayN等常见代理软件窗口变化时，合并事件后自动刷新外网IP
 - **Claude IP风险检测**（可选，默认关闭）：对比Cloudflare出口IP、检测受限地区、探测Claude直连可达性、识别VPN/代理/机房IP、追踪30天IP波动
 - **常用站点出口检测**（可选，默认关闭）：检测Google、YouTube、OpenAI、Claude和Netflix实际访问出口的国家/地区及网络标识
 
@@ -78,7 +79,7 @@ JP 154.31.113.180
 
 ## 🛰️ 代理软件自动检测刷新
 
-切换代理节点（如Clash分流规则）后，外网出口IP会变化，但插件默认按缓存间隔刷新，可能要等几分钟才能看到新IP。为此插件会在后台注册一个全局窗口事件钩子，监控常见代理软件窗口的**前台切换 / 显示或隐藏 / 最小化还原**，命中时立即触发一次外网IP强制刷新（无需等待缓存过期）。
+切换代理节点（如Clash分流规则）后，外网出口IP会变化，但插件默认按缓存间隔刷新，可能要等几分钟才能看到新IP。插件通过后台窗口事件钩子监控常见代理软件的**前台切换 / 显示或隐藏 / 最小化还原**，事件静默2秒后触发外网IP刷新，两次自动刷新至少间隔5秒；等待期间保留最后一次事件，避免窗口动画产生重复请求。手动刷新不受这个事件限速影响。
 
 ### 已支持的代理软件（按可执行文件名匹配）
 `clash.exe`、`clash-verge.exe`、`Clash Verge.exe`、`clash-verge-service.exe`、`mihomo.exe`、`mihomo-party.exe`、`Clash Party.exe`（Mihomo Party改名后的可执行文件）、`FlClash.exe`、`v2rayN.exe`、`v2rayNG.exe`、`Netch.exe`、`Qv2ray.exe`、`nekoray.exe`、`NekoBox.exe`、`sagernet.exe`、`Shadowsocks.exe`、`ss-win.exe`、`Proxifier.exe`、`ClashX.exe`
@@ -129,7 +130,7 @@ Netflix ->  JP NFLX
 
 - **显示设置**：选择显示内网IP、外网IP或两者
 - **网络适配器**：指定首选网络适配器或自动选择
-- **刷新间隔**：外网IP标准刷新间隔（默认5分钟）
+- **刷新间隔**：外网IP标准刷新间隔（默认2分钟）
 - **智能缓存**：启用网络变化检测和自适应刷新
 - **分隔符**：自定义IP间分隔符
 
@@ -143,14 +144,16 @@ Netflix ->  JP NFLX
 ### 网络变化检测
 - 自动检测内网IP变化（网络切换、VPN连接等）
 - 变化时立即获取新的外网IP，然后进入30秒快速验证模式
-- 连续6次验证后恢复正常2分钟间隔
+- 快速模式按完成的刷新次数计数，缓存读取不消耗周期；网络变化触发的刷新也计入6次验证
+- 稳定超过1小时后使用最大刷新间隔（默认5分钟）
+- 首次启动尚无缓存时短暂显示`N/A`，结果完成后由下一次显示回调更新；刷新失败保留上次成功结果，因此显示可能暂时滞后
 
 ### 响应速度对比
 | 场景 | 传统固定模式 | 智能模式 |
 |------|------------|---------|
 | 网络切换 | 最长2分钟 | **立即+30秒** |
 | VPN切换 | 最长2分钟 | **立即+30秒** |  
-| 代理软件窗口事件 | 需等缓存过期 | **立即触发刷新** |
+| 代理软件窗口事件 | 需等缓存过期 | **事件合并后后台刷新** |
 | 稳定使用 | 2分钟固定 | 2-5分钟自适应 |
 
 ## 🔧 技术特性
@@ -158,13 +161,15 @@ Netflix ->  JP NFLX
 - **安全通信**：使用HTTPS连接获取外网IP（ipinfo.io API）
 - **供应商解析**：从ipinfo.io的org字段获取供应商信息
 - **智能处理**：自动处理"AS906 DMIT Cloud Services"格式，提取主要名称
-- **多API支持**：ipinfo.io主服务 + httpbin.org备用服务
+- **响应校验**：校验HTTP状态、完整JSON与IPv4格式，限制响应大小，拒绝错误页与截断响应
 - **线程安全**：完整的多线程保护和缓存机制
-- **容错处理**：网络异常时显示"N/A"，包含详细的错误处理
+- **容错处理**：无缓存时显示"N/A"，临时网络异常保留上次成功结果并退避重试
 
 ## 💾 配置文件
 
-位置：`%TrafficMonitor%\plugins\config\tm_ip_plugin.ini`
+位置：TrafficMonitor提供的插件配置目录下的`tm_ip_plugin.ini`，具体目录由宿主决定。插件兼容`EI_CONFIG_DIR`和`OnInitialize`两种目录通知，启动时恢复已保存的开关。
+
+“显示内网IP / 显示外网IP”在选项窗口确认或右键菜单切换时立即保存，无需等退出程序；两种显示都关闭也会保存。目录未初始化、文件只读或没有写入权限时会提示“IP插件配置未保存”，并显示配置路径和错误代码；当次显示仍会改变，但不能保证重启后保留。
 
 ```ini
 [ip]
@@ -181,6 +186,12 @@ enable_exit_detection=0        # 启用常用站点出口检测（默认关闭�
 ```
 
 ## 🐛 故障排除
+
+### 重启后需要重新选择显示内网/外网IP
+1. 使用包含配置目录兼容修复的DLL；旧版只接收`OnInitialize`，在仅发送`EI_CONFIG_DIR`的宿主中不会写入配置。
+2. 切换显示后若出现保存失败提示，检查提示中的配置目录及INI文件是否允许当前Windows用户写入。
+3. 确认手动启动和开机自启使用同一份TrafficMonitor安装及同一Windows账户；不同副本可能读取不同配置。
+4. `show_internal`和`show_external`分别记录两个显示开关（`1`为开启，`0`为关闭）；退出后重新启动应恢复相同组合。新增Windows持久化测试以独立写入/读取进程检查恢复，不能替代在实际安装上的重启验证。
 
 ### 外网IP显示"N/A"
 1. 检查网络连接是否正常
@@ -221,8 +232,34 @@ enable_exit_detection=0        # 启用常用站点出口检测（默认关闭�
 - 打开 `TrafficMonitorIpPlugin.vcxproj`
 - 配置：`Debug|x64` 或 `Release|x64`
 - 工具集：v143，Windows SDK 10.0
+- C++标准：C++17
 - 字符编码：UTF-8 with BOM
 - 输出：`bin\x64\<Config>\TrafficMonitorIpPlugin.dll`
+
+### 自动化验证
+
+Windows上的完整构建与测试：
+
+```powershell
+msbuild TrafficMonitorIpPlugin.sln /p:Configuration=Release /p:Platform=x64
+cmake -S . -B work/build -A x64
+cmake --build work/build --config Release
+ctest --test-dir work/build -C Release --output-on-failure
+powershell -File tests/verify_exit_option.ps1
+powershell -File tests/verify_external_ip_proxy.ps1
+```
+
+macOS/Linux无需Windows SDK即可运行缓存调度、IP显示和风险响应解析测试：
+
+```bash
+python3 tests/run_portable_tests.py
+```
+
+也可通过CMake构建这些跨平台测试。GitHub Actions包含Linux测试及Windows Debug/Release构建和测试；本地运行跨平台测试不等于通过Windows集成验证。
+
+### 后台线程生命周期
+
+TrafficMonitor当前插件接口没有卸载通知。工厂创建的插件实例和DLL因此保留至宿主进程退出，替换DLL需先退出TrafficMonitor。各模块提供显式停止接口，供拥有明确生命周期的调用方使用；不得在`DllMain`或DLL静态析构中等待后台线程。这个约定遵循Windows关于[DLL加载锁与线程同步](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-best-practices)和[模块固定](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandleexw)的要求。
 
 ### 项目结构
 - `PluginInterface.h`：TrafficMonitor插件接口

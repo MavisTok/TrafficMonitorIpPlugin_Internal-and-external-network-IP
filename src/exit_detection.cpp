@@ -1,4 +1,4 @@
-#pragma execution_character_set("utf-8")
+﻿#pragma execution_character_set("utf-8")
 #include "exit_detection.h"
 
 #include <Windows.h>
@@ -300,6 +300,8 @@ SiteResult ProbeNetflix() {
                       response.ok ? ParseNetflixCountry(response.body) : L"");
 }
 
+bool RefreshShutdownRequested();
+
 Snapshot RunBatch() {
     Snapshot result = MakeInitialSnapshot();
     using Probe = SiteResult (*)();
@@ -311,6 +313,7 @@ Snapshot RunBatch() {
         ProbeNetflix
     };
     for (std::size_t i = 0; i < result.sites.size(); ++i) {
+        if (RefreshShutdownRequested()) return result;
         try {
             result.sites[i] = probes[i]();
         } catch (...) {
@@ -328,6 +331,7 @@ struct RefreshState {
     std::chrono::steady_clock::time_point last_refresh{};
     RefreshQueueState queue;
     std::thread worker;
+    bool shutdown_requested = false;
 };
 
 RefreshState& SharedState() {
@@ -335,30 +339,49 @@ RefreshState& SharedState() {
     return *state;
 }
 
+bool RefreshShutdownRequested() {
+    RefreshState& state = SharedState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.shutdown_requested;
+}
+
 void RefreshWorker() {
     RefreshState& state = SharedState();
-    for (;;) {
-        {
+    try {
+        for (;;) {
+            {
+                std::lock_guard<std::mutex> lock(state.mutex);
+                if (state.queue.shutdown_requested) {
+                    state.snapshot.refresh_in_flight = false;
+                    state.queue.refresh_in_flight = false;
+                    return;
+                }
+            }
+
+            Snapshot completed = RunBatch();
+            const auto now = std::chrono::steady_clock::now();
             std::lock_guard<std::mutex> lock(state.mutex);
-            if (state.queue.shutdown_requested) {
+            if (state.shutdown_requested) {
                 state.snapshot.refresh_in_flight = false;
                 state.queue.refresh_in_flight = false;
                 return;
             }
+            state.snapshot.sites = std::move(completed.sites);
+            state.snapshot.has_completed = true;
+            state.last_refresh = now;
+            if (CompleteRefreshIteration(state.queue) == RefreshCompletionDecision::RunAgain) {
+                state.snapshot.refresh_in_flight = true;
+                continue;
+            }
+            state.snapshot.refresh_in_flight = false;
+            return;
         }
-
-        Snapshot completed = RunBatch();
-        const auto now = std::chrono::steady_clock::now();
+    } catch (...) {
+        // Do not let a failed allocation in a worker terminate TrafficMonitor.
         std::lock_guard<std::mutex> lock(state.mutex);
-        state.snapshot.sites = std::move(completed.sites);
-        state.snapshot.has_completed = true;
-        state.last_refresh = now;
-        if (CompleteRefreshIteration(state.queue) == RefreshCompletionDecision::RunAgain) {
-            state.snapshot.refresh_in_flight = true;
-            continue;
-        }
         state.snapshot.refresh_in_flight = false;
-        return;
+        state.queue = RefreshQueueState{};
+        state.queue.shutdown_requested = state.shutdown_requested;
     }
 }
 
@@ -1016,6 +1039,7 @@ void RequestRefreshAsync(bool force_refresh) {
     std::thread previous_worker;
     {
         std::lock_guard<std::mutex> lock(state.mutex);
+        if (state.shutdown_requested) return;
         const auto now = std::chrono::steady_clock::now();
         const auto age = state.snapshot.has_completed
             ? now - state.last_refresh
@@ -1042,12 +1066,15 @@ void RequestRefreshAsync(bool force_refresh) {
         previous_worker.join();
     }
 
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (state.shutdown_requested) {
+        state.snapshot.refresh_in_flight = false;
+        return;
+    }
     try {
-        std::thread worker(RefreshWorker);
-        std::lock_guard<std::mutex> lock(state.mutex);
-        state.worker = std::move(worker);
+        // Publish the worker atomically with respect to shutdown.
+        state.worker = std::thread(RefreshWorker);
     } catch (...) {
-        std::lock_guard<std::mutex> lock(state.mutex);
         state.snapshot.refresh_in_flight = false;
         state.queue = RefreshQueueState{};
     }
@@ -1058,6 +1085,7 @@ void ShutdownRefreshWorker() {
     std::thread worker;
     {
         std::lock_guard<std::mutex> lock(state.mutex);
+        state.shutdown_requested = true;
         state.queue.shutdown_requested = true;
         state.queue.forced_pending = false;
         state.snapshot.refresh_in_flight = false;
@@ -1070,6 +1098,7 @@ void ShutdownRefreshWorker() {
     worker.join();
     std::lock_guard<std::mutex> lock(state.mutex);
     state.queue = RefreshQueueState{};
+    state.queue.shutdown_requested = true;
     state.snapshot.refresh_in_flight = false;
 }
 

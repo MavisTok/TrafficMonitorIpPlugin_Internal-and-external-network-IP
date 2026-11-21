@@ -13,6 +13,7 @@
 #pragma execution_character_set("utf-8")  // 设置源代码字符集为UTF-8
 
 #include "plugin.h"
+#include <algorithm>
 #include <Shlwapi.h>        // Shell轻量级实用程序API（用于路径操作）
 #include "options_dialog.h"  // 选项对话框
 #include "claude_risk.h"
@@ -83,6 +84,9 @@ TMIpPlugin::TMIpPlugin() {
 }
 
 TMIpPlugin::~TMIpPlugin() {
+    proxywatch::StopWatching();
+    iputils::ShutdownExternalIpWorker();
+    claude_risk::ShutdownRefreshWorker();
     exit_detection::ShutdownRefreshWorker();
 }
 
@@ -99,7 +103,8 @@ IPluginItem* TMIpPlugin::GetItem(int index) {
 
 void TMIpPlugin::DataRequired() {
     text_provider_.SetOptions(options_);
-    bool force_refresh_requested = force_refresh_next_ || proxywatch::ConsumeTriggerFlag();
+    const bool proxy_refresh_requested = proxywatch::ConsumeTriggerFlag();
+    bool force_refresh_requested = force_refresh_next_ || proxy_refresh_requested;
     item_.Update(force_refresh_requested);
     force_refresh_next_ = false;
 
@@ -131,16 +136,9 @@ void TMIpPlugin::DataRequired() {
     }
 
     if (options_.show_internal && options_.show_external) {
-        // Split for tooltip if both enabled
-        // Format: 内网: x\n外网: y
-        std::wstring internal, external;
-        size_t pos = v.find(options_.separator);
-        if (pos != std::wstring::npos) {
-            internal = v.substr(0, pos);
-            external = v.substr(pos + options_.separator.size());
-        } else {
-            internal = v;
-        }
+        // 直接读取快照字段，分隔符即使出现在IP里也不会破坏提示文本。
+        const auto& internal = item_.InternalText();
+        const auto& external = item_.ExternalText();
         tooltip_.clear();
         if (!internal.empty()) {
             tooltip_ += L"内网: ";
@@ -266,11 +264,11 @@ void TMIpPlugin::ShowClaudeRiskReport(HWND hWnd) {
             default: report += L"未知"; break;
         }
         report += L"\nVPN/代理: ";
-        report += risk.is_proxy ? L"是" : L"否";
+        report += !risk.risk_query_ok ? L"未知（查询失败）" : risk.is_proxy ? L"是" : L"否";
         report += L"\n机房/数据中心: ";
-        report += risk.is_hosting ? L"是" : L"否";
+        report += !risk.risk_query_ok ? L"未知（查询失败）" : risk.is_hosting ? L"是" : L"否";
         report += L"\n移动网络: ";
-        report += risk.is_mobile ? L"是" : L"否";
+        report += !risk.risk_query_ok ? L"未知（查询失败）" : risk.is_mobile ? L"是" : L"否";
         report += L"\n近30天出现过的不同外网IP数: " + std::to_wstring(risk.distinct_ip_count_30d);
         report += L"\n\n注：受限地区名单与直连探测逻辑均为社区经验整理，不代表Anthropic官方实时政策，仅供参考。";
     }
@@ -293,11 +291,41 @@ const wchar_t* TMIpPlugin::GetInfo(PluginInfoIndex index) {
 void TMIpPlugin::OnInitialize(ITrafficMonitor* pApp) {
     app_ = pApp;
     if (app_ && app_->GetAPIVersion() >= 1) {
-        const wchar_t* dir = app_->GetPluginConfigDir();
-        if (dir) config_dir_ = dir;
+        SetConfigDirectory(app_->GetPluginConfigDir());
     }
-    LoadOptions();
     proxywatch::StartWatching();
+}
+
+void TMIpPlugin::OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data) {
+    if (index == EI_CONFIG_DIR) SetConfigDirectory(data);
+}
+
+void TMIpPlugin::SetConfigDirectory(const wchar_t* directory) {
+    if (!directory || !*directory) return;
+    std::wstring path = directory;
+    if (PathIsRelativeW(path.c_str())) {
+        // 开机自启和手动启动的工作目录可能不同，相对路径固定以宿主EXE为基准。
+        wchar_t executable[32768]{};
+        const DWORD length = GetModuleFileNameW(nullptr, executable, (DWORD)std::size(executable));
+        if (length == 0 || length >= std::size(executable)) return;
+        const std::wstring executable_path(executable, length);
+        const auto slash = executable_path.find_last_of(L"\\/");
+        if (slash == std::wstring::npos) return;
+        path = JoinPath(executable_path.substr(0, slash), path);
+    }
+    const DWORD required = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
+    if (required == 0) return;
+    std::wstring absolute(required, L'\0');
+    const DWORD length = GetFullPathNameW(path.c_str(), required, &absolute[0], nullptr);
+    if (length == 0 || length >= required) return;
+    absolute.resize(length);
+    while (absolute.size() > 3 && (absolute.back() == L'\\' || absolute.back() == L'/')) {
+        absolute.pop_back();
+    }
+    if (absolute == config_dir_) return;
+    config_dir_ = std::move(absolute);
+    LoadOptions();
+    text_provider_.SetOptions(options_);
 }
 
 const wchar_t* TMIpPlugin::GetTooltipInfo() {
@@ -310,7 +338,7 @@ ITMPlugin::OptionReturn TMIpPlugin::ShowOptionsDialog(void* hParent) {
     if (changed) {
         options_ = tmp;
         text_provider_.SetOptions(options_);  // Update text provider with new options
-        SaveOptions();
+        if (!SaveOptions()) ReportSaveError((HWND)hParent);
         return OR_OPTION_CHANGED;
     }
     return OR_OPTION_UNCHANGED;
@@ -330,11 +358,11 @@ void TMIpPlugin::OnPluginCommand(int command_index, void* hWnd, void* /*para*/) 
     switch (command_index) {
     case 0:
         options_.show_internal = !options_.show_internal;
-        SaveOptions();
+        if (!SaveOptions()) ReportSaveError((HWND)hWnd);
         break;
     case 1:
         options_.show_external = !options_.show_external;
-        SaveOptions();
+        if (!SaveOptions()) ReportSaveError((HWND)hWnd);
         break;
     case 2:
         force_refresh_next_ = true;
@@ -370,10 +398,21 @@ void TMIpPlugin::LoadOptions() {
 
         int minutes = GetPrivateProfileIntW(L"ip", L"external_refresh_minutes", (int)options_.external_refresh.count(), ini.c_str());
         if (minutes <= 0) minutes = 2;
+        minutes = std::min(minutes, 1440);
         options_.external_refresh = std::chrono::minutes(minutes);
+
+        options_.enable_smart_cache = GetPrivateProfileIntW(
+            L"ip", L"enable_smart_cache", options_.enable_smart_cache ? 1 : 0, ini.c_str()) != 0;
+        int fast_seconds = GetPrivateProfileIntW(
+            L"ip", L"fast_refresh_seconds", (int)options_.fast_refresh.count(), ini.c_str());
+        options_.fast_refresh = std::chrono::seconds(std::clamp(fast_seconds, 1, 3600));
+        int max_minutes = GetPrivateProfileIntW(
+            L"ip", L"max_refresh_minutes", (int)options_.max_refresh.count(), ini.c_str());
+        options_.max_refresh = std::chrono::minutes(std::clamp(max_minutes, minutes, 1440));
 
         GetPrivateProfileStringW(L"ip", L"separator", L" | ", buf, (DWORD)std::size(buf), ini.c_str());
         options_.separator = buf;
+        if (options_.separator.empty()) options_.separator = L" | ";
 
         options_.enable_claude_risk_check = GetPrivateProfileIntW(
             L"ip", L"enable_claude_risk_check", options_.enable_claude_risk_check ? 1 : 0, ini.c_str()) != 0;
@@ -382,21 +421,46 @@ void TMIpPlugin::LoadOptions() {
     }
 }
 
-void TMIpPlugin::SaveOptions() {
-    if (config_dir_.empty()) return;
-    if (!EnsureDirectoryExists(config_dir_)) return;
+bool TMIpPlugin::SaveOptions() {
+    if (config_dir_.empty()) {
+        SetLastError(ERROR_PATH_NOT_FOUND);
+        return false;
+    }
+    if (!EnsureDirectoryExists(config_dir_)) return false;
     std::wstring ini = JoinPath(config_dir_, L"tm_ip_plugin.ini");
-    WritePrivateProfileStringW(L"ip", L"show_internal", options_.show_internal ? L"1" : L"0", ini.c_str());
-    WritePrivateProfileStringW(L"ip", L"show_external", options_.show_external ? L"1" : L"0", ini.c_str());
-    WritePrivateProfileStringW(L"ip", L"preferred_adapter", options_.preferred_adapter.c_str(), ini.c_str());
+    if (!WritePrivateProfileStringW(L"ip", L"show_internal", options_.show_internal ? L"1" : L"0", ini.c_str())) return false;
+    if (!WritePrivateProfileStringW(L"ip", L"show_external", options_.show_external ? L"1" : L"0", ini.c_str())) return false;
+    if (!WritePrivateProfileStringW(L"ip", L"preferred_adapter", options_.preferred_adapter.c_str(), ini.c_str())) return false;
     wchar_t tmp[32];
     _itow_s((int)options_.external_refresh.count(), tmp, 10);
-    WritePrivateProfileStringW(L"ip", L"external_refresh_minutes", tmp, ini.c_str());
-    WritePrivateProfileStringW(L"ip", L"separator", options_.separator.c_str(), ini.c_str());
-    WritePrivateProfileStringW(L"ip", L"enable_claude_risk_check",
-                                options_.enable_claude_risk_check ? L"1" : L"0", ini.c_str());
-    WritePrivateProfileStringW(L"ip", L"enable_exit_detection",
-                                options_.enable_exit_detection ? L"1" : L"0", ini.c_str());
+    if (!WritePrivateProfileStringW(L"ip", L"external_refresh_minutes", tmp, ini.c_str())) return false;
+    if (!WritePrivateProfileStringW(L"ip", L"enable_smart_cache",
+                                options_.enable_smart_cache ? L"1" : L"0", ini.c_str())) return false;
+    if (!WritePrivateProfileStringW(L"ip", L"fast_refresh_seconds",
+                                std::to_wstring(options_.fast_refresh.count()).c_str(), ini.c_str())) return false;
+    if (!WritePrivateProfileStringW(L"ip", L"max_refresh_minutes",
+                                std::to_wstring(options_.max_refresh.count()).c_str(), ini.c_str())) return false;
+    if (!WritePrivateProfileStringW(L"ip", L"separator", options_.separator.c_str(), ini.c_str())) return false;
+    if (!WritePrivateProfileStringW(L"ip", L"enable_claude_risk_check",
+                                options_.enable_claude_risk_check ? L"1" : L"0", ini.c_str())) return false;
+    if (!WritePrivateProfileStringW(L"ip", L"enable_exit_detection",
+                                options_.enable_exit_detection ? L"1" : L"0", ini.c_str())) return false;
+    // flush的返回值与普通写入不同，成功刷新缓存也可能返回0，不将其当作写入失败。
+    WritePrivateProfileStringW(nullptr, nullptr, nullptr, ini.c_str());
+    return true;
+}
+
+void TMIpPlugin::ReportSaveError(HWND parent) {
+    const DWORD error = GetLastError();
+    std::wstring message = L"当前显示已应用，但配置保存失败，重新启动后可能恢复原来的选择。\n\n";
+    if (config_dir_.empty()) {
+        message += L"宿主尚未提供插件配置目录。";
+    } else {
+        message += L"配置文件：" + JoinPath(config_dir_, L"tm_ip_plugin.ini");
+        message += L"\n请检查此目录和文件是否允许当前用户写入。";
+    }
+    message += L"\n错误代码：" + std::to_wstring(error);
+    MessageBoxW(parent, message.c_str(), L"IP插件配置未保存", MB_OK | MB_ICONWARNING);
 }
 
 // === IpPluginItem 自定义绘制函数实现 ===
@@ -485,6 +549,20 @@ void IpPluginItem::DrawItem(void* hDC, int x, int y, int w, int h, bool dark_mod
 
 // Exported factory
 extern "C" __declspec(dllexport) ITMPlugin* TMPluginGetInstance() {
-    static TMIpPlugin s_plugin;
-    return &s_plugin;
+    // API没有卸载回调。将模块及单例保留到进程退出，避免DLL卸载时仍有
+    // worker执行，或静态析构在loader lock中等待线程。替换DLL需要重启宿主。
+    static TMIpPlugin* s_plugin = []() -> TMIpPlugin* {
+        HMODULE module = nullptr;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_PIN,
+                               reinterpret_cast<LPCWSTR>(&g_hInst), &module)) {
+            return nullptr;
+        }
+        try {
+            return new TMIpPlugin;
+        } catch (...) {
+            return nullptr;
+        }
+    }();
+    return s_plugin;
 }

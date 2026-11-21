@@ -373,6 +373,9 @@ FodyWeavers.xsd
 
 # Project specific ignores
 .worktrees/
+work/
+build/
+cmake-build-*/
 log/
 *.LOG
 test_ipinfo.cpp

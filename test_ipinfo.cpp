@@ -1,5 +1,7 @@
 #include <iostream>
 #include <string>
+#include <chrono>
+#include <thread>
 #include "src/ip_utils.h"
 
 int main() {
@@ -10,6 +12,12 @@ int main() {
     std::wcout << L"Path: " << opt.path << std::endl;
     
     auto result = iputils::GetExternalIPv4WithCountry(opt, true);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!result.IsValid() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        result = iputils::GetExternalIPv4WithCountry(opt);
+    }
+    iputils::ShutdownExternalIpWorker();
     
     if (result.IsValid()) {
         std::wcout << L"Success!" << std::endl;
@@ -20,5 +28,5 @@ int main() {
         std::wcout << L"Failed to get external IP" << std::endl;
     }
     
-    return 0;
+    return result.IsValid() ? 0 : 1;
 }

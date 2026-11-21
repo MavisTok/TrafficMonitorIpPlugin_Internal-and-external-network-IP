@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file ip_utils.cpp
  * @brief TrafficMonitor IP插件的IP地址获取工具实现
  * @details 包含内网IPv4地址获取和外网IPv4地址获取的核心功能
@@ -9,6 +9,7 @@
  */
 
 #include "ip_utils.h"
+#include "external_ip_cache.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN  // 减少Windows头文件的包含内容，提高编译速度
@@ -25,6 +26,12 @@
 
 #include <vector>
 #include <mutex>       // 用于外网IP获取的线程同步
+#include <condition_variable>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <new>
+#include <thread>
 
 // 链接必需的系统库
 #pragma comment(lib, "Iphlpapi.lib")  // IP Helper API库
@@ -34,7 +41,8 @@
 static wchar_t* DuplicateWideString(LPCWSTR value) {
     if (!value || !*value) return nullptr;
     const size_t length = wcslen(value);
-    wchar_t* copy = new wchar_t[length + 1];
+    wchar_t* copy = new (std::nothrow) wchar_t[length + 1];
+    if (!copy) return nullptr;
     wcscpy_s(copy, length + 1, value);
     return copy;
 }
@@ -59,6 +67,23 @@ static void FreeIeProxyConfig(WINHTTP_CURRENT_USER_IE_PROXY_CONFIG& ie_proxy) {
         ie_proxy.lpszProxyBypass = nullptr;
     }
 }
+
+struct InternetHandleCloser {
+    void operator()(void* handle) const noexcept {
+        if (handle) WinHttpCloseHandle(handle);
+    }
+};
+using InternetHandle = std::unique_ptr<void, InternetHandleCloser>;
+
+struct ProxyInfoOwner {
+    WINHTTP_PROXY_INFO value{};
+    ~ProxyInfoOwner() { FreeProxyInfo(value); }
+};
+
+struct IeProxyConfigOwner {
+    WINHTTP_CURRENT_USER_IE_PROXY_CONFIG value{};
+    ~IeProxyConfigOwner() { FreeIeProxyConfig(value); }
+};
 
 static bool BuildProxyInfoFromIeConfigForUrl(
     const WINHTTP_CURRENT_USER_IE_PROXY_CONFIG& ie_proxy,
@@ -89,16 +114,16 @@ static bool BuildProxyInfoFromIeConfigForUrl(
     }
     auto_proxy_options.fAutoLogonIfChallenged = TRUE;
 
-    HINTERNET hSession = WinHttpOpen(L"TrafficMonitorIpPlugin/1.0",
+    InternetHandle hSession(WinHttpOpen(L"TrafficMonitorIpPlugin/1.0",
                                      WINHTTP_ACCESS_TYPE_NO_PROXY,
                                      WINHTTP_NO_PROXY_NAME,
-                                     WINHTTP_NO_PROXY_BYPASS, 0);
+                                     WINHTTP_NO_PROXY_BYPASS, 0));
     if (!hSession) return false;
+    if (!WinHttpSetTimeouts(hSession.get(), 3000, 3000, 3000, 5000)) return false;
 
     WINHTTP_PROXY_INFO detected_proxy{};
     const bool detected = !!WinHttpGetProxyForUrl(
-        hSession, url, &auto_proxy_options, &detected_proxy);
-    WinHttpCloseHandle(hSession);
+        hSession.get(), url, &auto_proxy_options, &detected_proxy);
 
     if (!detected || detected_proxy.dwAccessType != WINHTTP_ACCESS_TYPE_NAMED_PROXY ||
         !detected_proxy.lpszProxy || !*detected_proxy.lpszProxy) {
@@ -116,57 +141,23 @@ static bool BuildProxyInfoFromIeConfigForUrl(
 }
 
 static bool ApplyCurrentUserProxyForRequest(HINTERNET hRequest, LPCWSTR url) {
-    WINHTTP_CURRENT_USER_IE_PROXY_CONFIG ie_proxy{};
-    if (!WinHttpGetIEProxyConfigForCurrentUser(&ie_proxy)) {
+    IeProxyConfigOwner ie_proxy;
+    if (!WinHttpGetIEProxyConfigForCurrentUser(&ie_proxy.value)) {
         return false;
     }
 
-    WINHTTP_PROXY_INFO proxy_info{};
-    const bool has_proxy = BuildProxyInfoFromIeConfigForUrl(ie_proxy, url, proxy_info);
+    ProxyInfoOwner proxy_info;
+    const bool has_proxy = BuildProxyInfoFromIeConfigForUrl(ie_proxy.value, url, proxy_info.value);
     bool applied = false;
     if (has_proxy) {
         applied = !!WinHttpSetOption(
-            hRequest, WINHTTP_OPTION_PROXY, &proxy_info, sizeof(proxy_info));
+            hRequest, WINHTTP_OPTION_PROXY, &proxy_info.value, sizeof(proxy_info.value));
     }
 
-    FreeProxyInfo(proxy_info);
-    FreeIeProxyConfig(ie_proxy);
     return applied;
 }
 
 namespace iputils {
-
-/**
- * @brief 简单的JSON字段提取函数
- * @param json JSON字符串
- * @param field 要提取的字段名
- * @return 字段值，如果未找到返回空字符串
- * @details 简单实现，只处理字符串字段，格式："field":"value"
- */
-static std::string ExtractJsonField(const std::string& json, const std::string& field) {
-    // 构造查找模式："field"，允许冒号后有可选空格
-    std::string pattern = "\"" + field + "\"";
-    size_t start = json.find(pattern);
-    if (start == std::string::npos) return "";
-    
-    // 跳过字段名
-    start += pattern.length();
-    
-    // 跳过冒号和可能的空格
-    while (start < json.length() && (json[start] == ':' || json[start] == ' ' || json[start] == '\t')) {
-        start++;
-    }
-    
-    // 检查是否为字符串值（以"开始）
-    if (start >= json.length() || json[start] != '"') return "";
-    start++; // 跳过开始的引号
-    
-    // 查找结束引号
-    size_t end = json.find("\"", start);
-    if (end == std::string::npos) return "";
-    
-    return json.substr(start, end - start);
-}
 
 /**
  * @brief 检查sockaddr是否为有效的IPv4地址
@@ -363,205 +354,217 @@ std::wstring GetInternalIPv4(const std::wstring& preferred_adapter) {
 }
 
 
-/**
- * @brief 获取外网IPv4地址和国家信息，支持缓存和强制刷新
- * @param opt 外网IP获取选项配置
- * @param force_refresh 是否强制刷新（跳过缓存）
- * @return IpWithCountry结构，包含IP地址和国家代码，获取失败返回空的结构
- * @details 使用ipinfo.io服务获取IP地址和地理位置信息
- *          使用进程内缓存机制避免频繁网络请求，默认缓存5分钟
- *          支持自定义服务器和超时参数
- */
-IpWithCountry GetExternalIPv4WithCountry(const ExternalIpOptions& opt, bool force_refresh) {
-    // 静态变量用于缓存机制（线程安全）
-    static std::mutex mtx;                                      // 互斥锁保护缓存
-    static IpWithCountry cached_result;                         // 缓存的IP和国家信息
-    static std::chrono::steady_clock::time_point last_fetch{};  // 上次获取时间
-    static std::chrono::steady_clock::time_point last_change{}; // 上次IP变化时间
-    static int fast_mode_counter = 0;                           // 快速模式计数器
-    static std::wstring last_internal_ip;                       // 上次内网IP（用于变化检测）
+namespace {
 
-    const auto now = std::chrono::steady_clock::now();
-    
-    // 智能缓存策略检查
-    {
-        std::lock_guard<std::mutex> lk(mtx);
-        
-        // 检测内网IP变化（网络适配器变化的指示器）
-        std::wstring current_internal_ip = GetInternalIPv4();
-        bool network_changed = false;
-        if (!last_internal_ip.empty() && current_internal_ip != last_internal_ip) {
-            network_changed = true;
-            last_change = now;
-            fast_mode_counter = opt.adaptive_cycles;  // 启动快速模式
-            last_internal_ip = current_internal_ip;
-        } else if (last_internal_ip.empty()) {
-            last_internal_ip = current_internal_ip;
-        }
-        
-        // 如果强制刷新或网络发生变化，跳过缓存检查
-        if (force_refresh || network_changed) {
-            // 继续执行网络请求
-        }
-        // 否则检查缓存策略
-        else if (cached_result.IsValid() && last_fetch.time_since_epoch().count() != 0) {
-            std::chrono::milliseconds refresh_interval;
-            
-            // 根据策略选择刷新间隔
-            switch (opt.strategy) {
-                case CacheStrategy::FIXED:
-                    refresh_interval = opt.min_refresh;
-                    break;
-                    
-                case CacheStrategy::ADAPTIVE:
-                case CacheStrategy::HYBRID:
-                    if (fast_mode_counter > 0) {
-                        refresh_interval = opt.fast_refresh;  // 快速模式：30秒
-                        fast_mode_counter--;
-                    } else {
-                        // 根据稳定时间逐渐延长间隔
-                        auto stable_time = now - last_change;
-                        if (stable_time > std::chrono::hours(1)) {
-                            refresh_interval = opt.max_refresh;  // 超过1小时稳定：15分钟
-                        } else {
-                            refresh_interval = opt.min_refresh;  // 标准间隔：5分钟
-                        }
-                    }
-                    break;
-                    
-                case CacheStrategy::NETWORK_EVENT:
-                    refresh_interval = opt.max_refresh;  // 仅在网络事件时刷新
-                    break;
-            }
-            
-            if (now - last_fetch < refresh_interval) {
-                return cached_result;  // 返回缓存的结果
-            }
-        }
-    }
+constexpr std::size_t kMaximumExternalResponseBytes = 64u * 1024u;
 
-    IpWithCountry result;  // 存储从服务器获取的IP和国家信息
+std::wstring Utf8ToWide(const std::string& text) {
+    if (text.empty()) return {};
+    const int size = static_cast<int>(text.size());
+    const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                           text.data(), size, nullptr, 0);
+    if (length <= 0) return {};
+    std::wstring result(static_cast<std::size_t>(length), L'\0');
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), size,
+                             &result[0], length)) return {};
+    return result;
+}
 
-    // 步骤1: 初始化WinHTTP会话
-    HINTERNET hSession = WinHttpOpen(L"TrafficMonitorIpPlugin/1.0",
-                                     WINHTTP_ACCESS_TYPE_NO_PROXY,
-                                     WINHTTP_NO_PROXY_NAME,
-                                     WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return result;  // 会话创建失败
-
-    // 设置超时参数
-    WinHttpSetTimeouts(hSession, opt.connect_timeout_ms, opt.send_timeout_ms, 
-                      opt.receive_timeout_ms, opt.receive_timeout_ms);
-
-    // 步骤2: 连接到目标服务器（使用HTTPS端口443）
-    HINTERNET hConnect = WinHttpConnect(hSession, opt.host, INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hConnect) { 
-        WinHttpCloseHandle(hSession); 
-        return result; 
-    }
-
-    // 步骤3: 创建HTTPS请求
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", opt.path, nullptr,
-                                            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 
-                                            WINHTTP_FLAG_SECURE);
-    if (!hRequest) { 
-        WinHttpCloseHandle(hConnect); 
-        WinHttpCloseHandle(hSession); 
-        return result; 
-    }
-
+IpWithCountry FetchExternalIPv4(const ExternalIpOptions& opt) {
+    IpWithCountry result;
+    InternetHandle hSession(WinHttpOpen(L"TrafficMonitorIpPlugin/1.0",
+                                        WINHTTP_ACCESS_TYPE_NO_PROXY,
+                                        WINHTTP_NO_PROXY_NAME,
+                                        WINHTTP_NO_PROXY_BYPASS, 0));
+    if (!hSession) return result;
+    // WinHTTP takes resolve, connect, send, receive timeouts, in that order.
+    if (!WinHttpSetTimeouts(hSession.get(), opt.connect_timeout_ms,
+                            opt.connect_timeout_ms, opt.send_timeout_ms,
+                            opt.receive_timeout_ms)) return result;
+    InternetHandle hConnect(WinHttpConnect(hSession.get(), opt.host,
+                                            INTERNET_DEFAULT_HTTPS_PORT, 0));
+    if (!hConnect) return result;
+    InternetHandle request(WinHttpOpenRequest(hConnect.get(), L"GET", opt.path, nullptr,
+                                             WINHTTP_NO_REFERER,
+                                             WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                             WINHTTP_FLAG_SECURE));
+    if (!request) return result;
+    HINTERNET hRequest = request.get();
     std::wstring request_url = L"https://";
     request_url += opt.host;
     request_url += opt.path;
     ApplyCurrentUserProxyForRequest(hRequest, request_url.c_str());
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(hRequest, nullptr)) return result;
+    DWORD status = 0;
+    DWORD status_size = sizeof(status);
+    if (!WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
+                             WINHTTP_NO_HEADER_INDEX) || status != 200) return result;
 
-    // 步骤4: 发送HTTP请求并接收响应
-    bool ok = !!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                                   WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
-    if (ok) ok = !!WinHttpReceiveResponse(hRequest, nullptr);
+    std::string data;
+    for (;;) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(hRequest, &available)) return result;
+        if (available == 0) break;
+        if (available > kMaximumExternalResponseBytes - data.size()) return result;
+        const std::size_t old_size = data.size();
+        data.resize(old_size + available);
+        DWORD read = 0;
+        if (!WinHttpReadData(hRequest, &data[old_size], available, &read) || read == 0) return result;
+        data.resize(old_size + read);
+    }
 
-    // 步骤5: 读取响应数据
-    if (ok) {
-        std::string data;  // 存储从服务器读取的原始数据
-        DWORD dwSize = 0;
-        
-        // 循环读取所有可用数据
-        do {
-            dwSize = 0;
-            if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;  // 查询可用数据大小
-            if (dwSize == 0) break;  // 没有更多数据
-            
-            size_t old = data.size();
-            data.resize(old + dwSize);  // 扩展缓冲区
-            DWORD dwRead = 0;
-            
-            // 读取数据到缓冲区
-            if (!WinHttpReadData(hRequest, const_cast<char*>(data.data()) + old, dwSize, &dwRead)) 
-                break;
-            data.resize(old + dwRead);  // 调整实际读取的大小
-        } while (dwSize > 0);
+    detail::ExternalIpJsonFields fields;
+    if (!detail::ExternalIpJsonParser(data).Parse(fields)) return result;
+    const std::string& ip = fields.ip.empty() ? fields.origin : fields.ip;
+    if (!detail::IsStrictIPv4(ip)) return result;
+    result.ip.assign(ip.begin(), ip.end());
+    const std::string country = detail::NormalizeCountry(fields.country);
+    result.country.assign(country.begin(), country.end());
+    result.as_name = Utf8ToWide(fields.org);
+    return result;
+}
 
-        // 步骤6: 解析JSON响应数据（ipinfo.io格式）
-        auto begin = data.find_first_not_of(" \t\r\n");  // 找到第一个非空白字符
-        auto end = data.find_last_not_of(" \t\r\n");    // 找到最后一个非空白字符
-        std::string trimmed = (begin == std::string::npos) ? std::string() : data.substr(begin, end - begin + 1);
-        
-        if (!trimmed.empty()) {
-            // 提取IP地址和国家代码字段（尝试多种API格式）
-            std::string ip = ExtractJsonField(trimmed, "ip");
-            if (ip.empty()) {
-                ip = ExtractJsonField(trimmed, "origin");  // httpbin.org格式备用
-            }
-            std::string country = ExtractJsonField(trimmed, "country");
-            std::string as_name = ExtractJsonField(trimmed, "org");
-            
-            if (!ip.empty()) {
-                // 将UTF-8编码的IP地址转换为宽字符串
-                int wlen = MultiByteToWideChar(CP_UTF8, 0, ip.c_str(), (int)ip.size(), nullptr, 0);
-                if (wlen > 0) {
-                    std::wstring wip(wlen, L'\0');
-                    MultiByteToWideChar(CP_UTF8, 0, ip.c_str(), (int)ip.size(), 
-                                      const_cast<wchar_t*>(wip.data()), wlen);
-                    result.ip = std::move(wip);
+struct OwnedExternalIpOptions {
+    ExternalIpOptions values;
+    std::wstring host;
+    std::wstring path;
+
+    explicit OwnedExternalIpOptions(const ExternalIpOptions& options)
+        : values(options), host(options.host ? options.host : L""),
+          path(options.path ? options.path : L"") {}
+
+    ExternalIpOptions View() const {
+        ExternalIpOptions result = values;
+        result.host = host.c_str();
+        result.path = path.c_str();
+        return result;
+    }
+};
+
+struct ExternalIpWorkerState {
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::thread worker;
+    bool stopping = false;
+    bool check_requested = false;
+    bool force_requested = false;
+    std::uint64_t endpoint_generation = 0;
+    std::shared_ptr<const OwnedExternalIpOptions> options =
+        std::make_shared<OwnedExternalIpOptions>(ExternalIpOptions{});
+    detail::ExternalIpCacheState cache;
+    detail::ExternalIpRefreshQueue queue;
+    IpWithCountry snapshot;
+};
+
+ExternalIpWorkerState& ExternalWorker() {
+    // This DLL is pinned for the process lifetime. Explicit shutdown is available
+    // for callers with an ordinary, non-loader-lock teardown point.
+    static ExternalIpWorkerState* state = new ExternalIpWorkerState;
+    return *state;
+}
+
+void RunExternalIpWorker(ExternalIpWorkerState& state) {
+    std::unique_lock<std::mutex> lock(state.mutex);
+    for (;;) {
+        state.condition.wait(lock, [&] { return state.stopping || state.check_requested; });
+        if (state.stopping) return;
+        state.queue.Start();
+        bool forced = state.force_requested;
+        state.force_requested = false;
+        state.check_requested = false;
+        for (;;) {
+            const auto owned = state.options;
+            const auto options = owned->View();
+            const std::uint64_t generation = state.endpoint_generation;
+            lock.unlock();
+
+            IpWithCountry fetched;
+            bool attempted = false;
+            try {
+                const std::wstring internal = GetInternalIPv4();
+                const auto now = detail::ExternalIpCacheState::Clock::now();
+                lock.lock();
+                bool refresh = false;
+                if (generation == state.endpoint_generation && !state.stopping) {
+                    const bool changed = state.cache.ObserveNetwork(internal, now, options.adaptive_cycles);
+                    refresh = state.cache.ShouldRefresh(options, now, forced, changed);
                 }
-            }
-            
-            if (!country.empty()) {
-                // 将UTF-8编码的国家代码转换为宽字符串
-                int wlen = MultiByteToWideChar(CP_UTF8, 0, country.c_str(), (int)country.size(), nullptr, 0);
-                if (wlen > 0) {
-                    std::wstring wcountry(wlen, L'\0');
-                    MultiByteToWideChar(CP_UTF8, 0, country.c_str(), (int)country.size(), 
-                                      const_cast<wchar_t*>(wcountry.data()), wlen);
-                    result.country = std::move(wcountry);
+                lock.unlock();
+                if (refresh) {
+                    attempted = true;
+                    fetched = FetchExternalIPv4(options);
                 }
+            } catch (...) {
+                // A failed allocation or request must not terminate the host.
+                if (lock.owns_lock()) lock.unlock();
+                attempted = true;
             }
-            if (!as_name.empty()) {
-                // 将UTF-8编码的as_name转换为宽字符串
-                int wlen = MultiByteToWideChar(CP_UTF8, 0, as_name.c_str(), (int)as_name.size(), nullptr, 0);
-                if (wlen > 0) {
-                    std::wstring was_name(wlen, L'\0');
-                    MultiByteToWideChar(CP_UTF8, 0, as_name.c_str(), (int)as_name.size(),
-                        const_cast<wchar_t*>(was_name.data()), wlen);
-                    result.as_name = std::move(was_name);
-                }
+
+            lock.lock();
+            if (attempted && generation == state.endpoint_generation) {
+                state.cache.Complete(fetched.IsValid(), detail::ExternalIpCacheState::Clock::now());
+                if (fetched.IsValid()) state.snapshot = std::move(fetched);
             }
+            if (state.stopping) return;
+            if (!state.queue.Complete()) break;
+            // The follow-up uses the newest endpoint/options, so it also consumes
+            // an endpoint-change request queued while the old request was active.
+            state.check_requested = false;
+            state.force_requested = false;
+            forced = true;
         }
     }
+}
 
-    // 步骤7: 清理资源
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+} // namespace
 
-    // 步骤8: 更新缓存（如果获取成功）
-    if (result.IsValid()) {
-        std::lock_guard<std::mutex> lk(mtx);
-        cached_result = result;   // 更新缓存的结果
-        last_fetch = now;         // 更新获取时间
+IpWithCountry GetExternalIPv4WithCountry(const ExternalIpOptions& opt, bool force_refresh) {
+    auto& state = ExternalWorker();
+    auto owned = std::make_shared<OwnedExternalIpOptions>(opt);
+    if (owned->host.empty() || owned->path.empty()) return {};
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (state.stopping) return state.snapshot;
+    const bool endpoint_changed = owned->host != state.options->host || owned->path != state.options->path;
+    state.options = std::move(owned);
+    if (endpoint_changed) {
+        ++state.endpoint_generation;
+        state.snapshot = {};
+        state.cache = {};
+        state.check_requested = true;
+        state.force_requested = true;
     }
+    if (state.queue.in_flight) {
+        if (force_refresh) state.queue.RequestForce();
+    } else {
+        state.check_requested = true;
+        state.force_requested = state.force_requested || force_refresh;
+    }
+    if (!state.worker.joinable()) {
+        try {
+            state.worker = std::thread(RunExternalIpWorker, std::ref(state));
+        } catch (...) {
+            // The next host update can retry starting the worker.
+            return state.snapshot;
+        }
+    }
+    state.condition.notify_one();
+    return state.snapshot;
+}
 
-    return result;  // 返回获取到的IP和国家信息（可能为空）
+void ShutdownExternalIpWorker() {
+    auto& state = ExternalWorker();
+    std::thread worker;
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.stopping = true;
+        state.check_requested = false;
+        worker = std::move(state.worker);
+        state.condition.notify_one();
+    }
+    if (worker.joinable()) worker.join();
 }
 
 /**

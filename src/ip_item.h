@@ -10,6 +10,7 @@
 #pragma once
 
 #include <string>
+#include <utility>
 #include "plugin_options.h"
 #include "ip_utils.h"
 
@@ -20,6 +21,12 @@
  */
 class IpTextProvider {
 public:
+    struct Snapshot {
+        std::wstring internal;
+        iputils::IpWithCountry external;
+        std::wstring text;
+    };
+
     /**
      * @brief 构造函数
      * @param opts 插件配置选项
@@ -49,24 +56,28 @@ public:
      *          - 都不启用：返回提示信息
      *          - 获取失败：显示"N/A"而不是空白
      */
-    std::wstring GetText(bool force_external_refresh = false) {
-        std::wstring internal;  // 内网IP地址
+    Snapshot GetSnapshot(bool force_external_refresh = false) {
+        Snapshot snapshot;
         std::wstring external;  // 外网IP地址
 
         // 获取内网IP（如果启用）
         if (options_.show_internal) {
-            internal = iputils::GetInternalIPv4(options_.preferred_adapter);
-            if (internal.empty()) {
-                internal = L"N/A";  // 显示获取失败状态，而不是空白
+            snapshot.internal = iputils::GetInternalIPv4(options_.preferred_adapter);
+            if (snapshot.internal.empty()) {
+                snapshot.internal = L"N/A";
             }
         }
 
         // 获取外网IP（如果启用）
         std::wstring company_name;
-        iputils::IpWithCountry result;  // 将result声明移到外面
+        auto& result = snapshot.external;
         if (options_.show_external) {
             iputils::ExternalIpOptions opt;
+            opt.strategy = options_.enable_smart_cache
+                ? iputils::CacheStrategy::HYBRID : iputils::CacheStrategy::FIXED;
             opt.min_refresh = options_.external_refresh;  // 使用配置的刷新间隔
+            opt.fast_refresh = options_.fast_refresh;
+            opt.max_refresh = options_.max_refresh;
             result = iputils::GetExternalIPv4WithCountry(opt, force_external_refresh);
             if (result.IsValid()) {
                 external = result.GetDisplayString();  // 使用格式化字符串（包含国家代码）
@@ -79,27 +90,30 @@ public:
         // 根据配置组合显示文本
         if (options_.show_internal && options_.show_external) {
             // 同时显示内网和外网IP，用分隔符连接
-            return internal + options_.separator + external;
-        }
-        if (options_.show_internal) {
+            snapshot.text = snapshot.internal + options_.separator + external;
+        } else if (options_.show_internal) {
             // 仅显示内网IP
-            return internal;
-        }
-        if (options_.show_external) {
+            snapshot.text = snapshot.internal;
+        } else if (options_.show_external) {
             // 仅显示外网IP时，如果有公司信息则在内网位置显示，外网位置显示IP
             if (!result.as_name.empty() && external != L"N/A") {
                 // 先尝试使用处理过的公司名称
                 if (!company_name.empty()) {
-                    return company_name + options_.separator + external;
+                    snapshot.text = company_name + options_.separator + external;
+                } else {
+                    snapshot.text = result.as_name + options_.separator + external;
                 }
-                // 如果处理失败，直接使用原始as_name
-                return result.as_name + options_.separator + external;
+            } else {
+                snapshot.text = external;
             }
-            return external;
+        } else {
+            snapshot.text = L"请启用IP显示";
         }
-        
-        // 如果两个都没有启用，显示提示信息
-        return L"请启用IP显示";
+        return snapshot;
+    }
+
+    std::wstring GetText(bool force_external_refresh = false) {
+        return GetSnapshot(force_external_refresh).text;
     }
 
 private:

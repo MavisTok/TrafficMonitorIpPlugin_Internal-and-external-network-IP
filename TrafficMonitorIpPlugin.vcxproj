@@ -21,13 +21,13 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -53,6 +53,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <PreprocessorDefinitions>WIN32;_WINDOWS;UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <ConformanceMode>true</ConformanceMode>
@@ -64,7 +65,7 @@
     </Link>
     <ResourceCompile>
       <Culture>0x0804</Culture>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/c65001 %(AdditionalOptions)</AdditionalOptions>
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -74,6 +75,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <PreprocessorDefinitions>WIN32;_WINDOWS;UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <ConformanceMode>true</ConformanceMode>
@@ -86,7 +88,7 @@
     </Link>
     <ResourceCompile>
       <Culture>0x0804</Culture>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/c65001 %(AdditionalOptions)</AdditionalOptions>
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -101,13 +103,16 @@
   <ItemGroup>
     <ClInclude Include="PluginInterface.h" />
     <ClInclude Include="src\claude_risk.h" />
+    <ClInclude Include="src\claude_risk_parse.h" />
     <ClInclude Include="src\exit_detection.h" />
+    <ClInclude Include="src\external_ip_cache.h" />
     <ClInclude Include="src\ip_item.h" />
     <ClInclude Include="src\ip_utils.h" />
     <ClInclude Include="src\options_dialog.h" />
     <ClInclude Include="src\plugin.h" />
     <ClInclude Include="src\plugin_options.h" />
     <ClInclude Include="src\proxy_watch.h" />
+    <ClInclude Include="src\winhttp_proxy.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="res\plugin.rc" />

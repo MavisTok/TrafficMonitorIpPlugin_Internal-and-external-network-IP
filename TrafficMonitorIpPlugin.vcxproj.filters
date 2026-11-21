@@ -40,7 +40,13 @@
     <ClInclude Include="src\claude_risk.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="src\claude_risk_parse.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="src\exit_detection.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="src\external_ip_cache.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="src\ip_item.h">
@@ -59,6 +65,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="src\proxy_watch.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="src\winhttp_proxy.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

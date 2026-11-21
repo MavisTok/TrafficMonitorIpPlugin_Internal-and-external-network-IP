@@ -1,0 +1,49 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - name: Build Visual Studio solution
+        run: msbuild TrafficMonitorIpPlugin.sln /m /p:Configuration=${{ matrix.configuration }} /p:Platform=x64
+      - name: Configure CMake
+        run: cmake -S . -B build -A x64 -T v143 -DBUILD_TESTING=ON
+      - name: Build plugin and tests with CMake
+        run: cmake --build build --config ${{ matrix.configuration }} --parallel
+      - name: Run all C++ tests
+        run: ctest --test-dir build -C ${{ matrix.configuration }} --output-on-failure
+      - name: Verify exit detection integration
+        run: ./tests/verify_exit_option.ps1
+      - name: Verify external IP proxy integration
+        run: ./tests/verify_external_ip_proxy.ps1
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrafficMonitorIpPlugin-x64-${{ matrix.configuration }}
+          path: bin/x64/${{ matrix.configuration }}/TrafficMonitorIpPlugin.dll
+          if-no-files-found: error
+
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure portable tests
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build portable tests
+        run: cmake --build build --parallel
+      - name: Run portable tests
+        run: ctest --test-dir build --output-on-failure

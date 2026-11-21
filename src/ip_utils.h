@@ -151,12 +151,19 @@ std::wstring GetInternalIPv4(const std::wstring& preferred_adapter = L"");
  * @brief 获取外网IPv4地址和国家信息（支持缓存和强制刷新）
  * @param opt 外网IP获取选项配置
  * @param force_refresh 是否强制刷新（跳过缓存）
- * @return IpWithCountry结构，包含IP地址和国家代码，获取失败返回空的结构
- * @details 使用ipinfo.io服务获取IP地址和地理位置信息
- *          使用进程内缓存机制避免频繁网络请求，默认缓存5分钟
- *          支持自定义服务器和超时参数
+ * @return 最近一次成功的缓存快照，首次后台获取完成前返回空结构
+ * @details 立即返回快照，网络和适配器检查由单个后台线程完成。
+ *          强制刷新在后台执行；进行中的刷新最多合并一次强制补跑。
+ *          补跑期间的强制信号不再追加请求；本批次完成后的新强制请求可启动下一批次。
+ *          请求失败保留已有快照，并在下次调用时按30秒间隔重试。
  */
 IpWithCountry GetExternalIPv4WithCountry(const ExternalIpOptions& opt = {}, bool force_refresh = false);
+
+/**
+ * @brief 停止接收外网IP刷新请求，并等待后台线程结束（不可从DllMain调用）
+ * @details 等待当前同步WinHTTP请求完成后退出。停止后不再启动新请求。
+ */
+void ShutdownExternalIpWorker();
 
 /**
  * @brief 获取外网IPv4地址（兼容性函数）

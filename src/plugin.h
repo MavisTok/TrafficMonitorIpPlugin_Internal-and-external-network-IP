@@ -59,34 +59,14 @@ public:
             return; 
         }
         
-        // 获取完整文本（备用）
-        value_ = provider_->GetText(force_external_refresh);
-        
-        // 分别获取内网和外网IP用于垂直显示
+        // 每轮只获取一个快照，文本、绘制与风险检测使用同一份数据。
+        auto snapshot = provider_->GetSnapshot(force_external_refresh);
+        value_ = std::move(snapshot.text);
+        ext_result_ = std::move(snapshot.external);
         const auto& options = provider_->GetOptions();
-        
-        // 获取外网IP和公司信息（无论是否显示内网都需要获取）
-        ext_result_ = iputils::IpWithCountry{};
-        if (options.show_external) {
-            iputils::ExternalIpOptions opt;
-            // 配置智能缓存策略
-            if (options.enable_smart_cache) {
-                opt.strategy = iputils::CacheStrategy::HYBRID;
-                opt.min_refresh = options.external_refresh;
-                opt.fast_refresh = options.fast_refresh;
-                opt.max_refresh = options.max_refresh;
-            } else {
-                opt.strategy = iputils::CacheStrategy::FIXED;
-                opt.min_refresh = options.external_refresh;
-            }
-            
-            ext_result_ = iputils::GetExternalIPv4WithCountry(opt, force_external_refresh);
-        }
 
         if (options.show_internal) {
-            // 显示内网IP
-            internal_ip_ = iputils::GetInternalIPv4(options.preferred_adapter);
-            if (internal_ip_.empty()) internal_ip_ = L"N/A";
+            internal_ip_ = std::move(snapshot.internal);
         } else if (options.show_external && ext_result_.IsValid() && !ext_result_.as_name.empty()) {
             // 内网关闭但外网开启时，在内网位置显示公司名称
             internal_ip_ = ext_result_.GetCompanyName();
@@ -110,6 +90,9 @@ public:
      * @return IP地址字符串的常量引用
      */
     const std::wstring& RawValue() const { return value_; }
+
+    const std::wstring& InternalText() const { return internal_ip_; }
+    const std::wstring& ExternalText() const { return external_ip_; }
 
     /**
      * @brief 获取最近一次检测到的外网IP（原始值，不含国家代码前缀）
@@ -153,6 +136,7 @@ public:
     OptionReturn ShowOptionsDialog(void* hParent) override;                       ///< 显示选项对话框
     const wchar_t* GetInfo(PluginInfoIndex index) override;                      ///< 获取插件信息
     void OnInitialize(ITrafficMonitor* pApp) override;                           ///< 插件初始化
+    void OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data) override;    ///< 兼容旧版宿主的配置目录通知
     const wchar_t* GetTooltipInfo() override;                                    ///< 获取工具提示
 
     // === 插件命令接口实现 ===
@@ -164,7 +148,9 @@ public:
 private:
     // === 私有辅助方法 ===
     void LoadOptions();                                                           ///< 从配置文件加载选项
-    void SaveOptions();                                                           ///< 保存选项到配置文件
+    bool SaveOptions();                                                           ///< 保存选项，失败时保留GetLastError
+    void SetConfigDirectory(const wchar_t* directory);                            ///< 两种初始化接口共用配置目录
+    void ReportSaveError(HWND parent);                                            ///< 显示未能持久化的路径和原因
     void AppendClaudeRiskTooltip();                                               ///< 在tooltip_末尾追加Claude风险检测段落
     void AppendExitDetectionTooltip();                                             ///< 在tooltip_末尾追加常见网站出口检测段落
     void ShowClaudeRiskReport(HWND hWnd);                                         ///< 弹窗展示完整Claude风险报告

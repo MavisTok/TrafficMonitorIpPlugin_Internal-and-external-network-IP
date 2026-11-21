@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file claude_risk.h
  * @brief Claude IP风险检测模块接口声明
  * @details 整合受限地区检测、直连可达性探测、VPN/代理/机房风险查询、
@@ -66,6 +66,9 @@ void RequestClaudeRiskRefreshAsync(const std::wstring& config_dir,
                                     const std::wstring& current_external_ip,
                                     const std::wstring& current_country,
                                     bool force_refresh);
+
+/// 停止后续检测并等待当前请求结束；应由所有者在 DLL loader lock 之外调用。
+void ShutdownRefreshWorker();
 
 // === 以下为内部纯逻辑函数，声明在头文件中以便独立验证 ===
 
