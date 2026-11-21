@@ -110,10 +110,14 @@ int main() {
     CHECK(ExternalIpJsonParser("{\n\"origin\" \n: \"1.2.3.4\", \"nested\": [true,false,null,-2.3e+4,{}]}\n").Parse(fields));
     CHECK(fields.origin == "1.2.3.4");
     CHECK(fields.ip.empty());
-    CHECK(ExternalIpJsonParser(R"({"ip":"\u0031.2.3.4","org":"A \"B\" \\ \u4e2d \ud83c\uddef"})").Parse(fields));
+    // Keep escaped raw strings outside CHECK: MSVC's traditional preprocessor
+    // does not stringify these literals correctly through #expression.
+    const std::string escaped_json = R"({"ip":"\u0031.2.3.4","org":"A \"B\" \\ \u4e2d \ud83c\uddef"})";
+    CHECK(ExternalIpJsonParser(escaped_json).Parse(fields));
     CHECK(fields.ip == "1.2.3.4");
     CHECK(fields.org == "A \"B\" \\ \xe4\xb8\xad \xf0\x9f\x87\xaf");
-    CHECK(ExternalIpJsonParser(R"({"nested":{"ip":"1.2.3.4"},"message":"\"ip\":\"5.6.7.8\""})").Parse(fields));
+    const std::string nested_json = R"({"nested":{"ip":"1.2.3.4"},"message":"\"ip\":\"5.6.7.8\""})";
+    CHECK(ExternalIpJsonParser(nested_json).Parse(fields));
     CHECK(fields.ip.empty());
     for (const std::string value : {
             R"({"ip":"1.2.3.4"})" " garbage",
